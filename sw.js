@@ -1,6 +1,6 @@
 // Offline cache for the app shell. Photos live in IndexedDB on the device.
-const CACHE = 'closia-v2';
-const SHELL = ['./', './index.html', './config.js', './app.js', './manifest.webmanifest', './IBMPlexSansArabic-Medium.ttf', './fonts/alexandria-arabic-400-normal.woff2', './fonts/alexandria-arabic-600-normal.woff2', './fonts/alexandria-arabic-800-normal.woff2',
+const CACHE = 'closia-v3';
+const SHELL = ['./', './index.html', './config.js', './cutout.js', './app.js', './manifest.webmanifest', './IBMPlexSansArabic-Medium.ttf', './fonts/alexandria-arabic-400-normal.woff2', './fonts/alexandria-arabic-600-normal.woff2', './fonts/alexandria-arabic-800-normal.woff2',
   './icons/apple-touch-icon.png', './icons/icon-192.png', './icons/icon-512.png'];
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));

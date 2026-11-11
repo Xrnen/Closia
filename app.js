@@ -166,7 +166,7 @@ function mkCanvas(w,h){ const c=document.createElement('canvas'); c.width=w; c.h
 /* Pipeline: source photo (canvas) → optional enhancement → alpha mask (AI or classic,
    plus manual touch-ups) → composed cut-out. The source and mask are stored with the
    item so every step can be redone later. */
-function srcFromImage(im,MAX=720){
+function srcFromImage(im,MAX=1280){
   const k=Math.min(1,MAX/Math.max(im.naturalWidth||im.width,im.naturalHeight||im.height));
   const w=Math.max(8,Math.round((im.naturalWidth||im.width)*k)), h=Math.max(8,Math.round((im.naturalHeight||im.height)*k));
   const c=mkCanvas(w,h), x=c.getContext('2d'); x.fillStyle='#fff'; x.fillRect(0,0,w,h); x.drawImage(im,0,0,w,h); return c;
@@ -250,16 +250,17 @@ function alphaToURL(a,w,h){ const c=mkCanvas(w,h), x=c.getContext('2d'), id=x.cr
 async function alphaFromURL(url,w,h){ const im=await loadImg(url); const c=mkCanvas(w,h); c.getContext('2d').drawImage(im,0,0,w,h);
   const d=ctx2d(c).getImageData(0,0,w,h).data, a=new Uint8ClampedArray(w*h); for(let i=0;i<a.length;i++) a[i]=d[i*4]; return a; }
 // Build the final picture + colours from source, mask and settings.
-function compose(src,alpha,{auto=true,bright=0,useCut=true}={}){
+function compose(src,alpha,{auto=true,bright=0,useCut=true,final=false}={}){
   const w=src.width,h=src.height,N=w*h, id=enhancedData(src,{auto,bright}), d=id.data;
   if(useCut&&alpha){
     const bg=new Uint8Array(N); let x0=w,y0=h,x1=0,y1=0;
     for(let i=0;i<N;i++){ const v=alpha[i]; d[i*4+3]=v; bg[i]=v<128?1:0;
       if(v>20){ const px=i%w,py=(i/w)|0; if(px<x0)x0=px; if(px>x1)x1=px; if(py<y0)y0=py; if(py>y1)y1=py; } }
     if(x1>x0&&y1>y0){
+      if(final&&window.ClosiaCutout) ClosiaCutout.decontaminate(d,alpha,w,h);   // clean edge colours (no halo)
       const colors=detectColors(d,w,h,bg,null);
       const c=mkCanvas(w,h); c.getContext('2d').putImageData(id,0,0);
-      const bw=x1-x0+1, bh=y1-y0+1, p=Math.round(Math.max(bw,bh)*.03), kk=Math.min(1,640/Math.max(bw+2*p,bh+2*p));
+      const bw=x1-x0+1, bh=y1-y0+1, p=Math.round(Math.max(bw,bh)*.03), kk=Math.min(1,1000/Math.max(bw+2*p,bh+2*p));
       const cc=mkCanvas(Math.round((bw+2*p)*kk),Math.round((bh+2*p)*kk));
       cc.getContext('2d').drawImage(c,x0,y0,bw,bh,p*kk,p*kk,bw*kk,bh*kk);
       return {img:cc.toDataURL('image/png'),ar:cc.height/cc.width,cut:true,...colors};
@@ -784,28 +785,39 @@ async function ensureWork(it){
   const s=mkCanvas(w,h), sx=s.getContext('2d'); sx.fillStyle='#fff'; sx.fillRect(0,0,w,h); sx.drawImage(c,0,0);
   Object.assign(it,{_src:s,_alpha:a,enh:false,bright:0,useCut:!!a});
 }
-function recompose(it){
-  const r=compose(it._src,it._alpha,{auto:it.enh!==false,bright:it.bright||0,useCut:it.useCut!==false});
+function recompose(it,final=false){
+  const r=compose(it._src,it._alpha,{auto:it.enh!==false,bright:it.bright||0,useCut:it.useCut!==false,final});
   it.img=r.img; it.ar=r.ar; it.cut=r.cut; if(it._colorAuto){ it.color=r.color; it.color2=r.color2; }
 }
+// Garment isolation engine (cutout.js): analyse once, then cut any category from the same photo.
+async function cutoutAnalyse(src){
+  if(!window.ClosiaCutout) throw new Error('engine missing');
+  if(!ClosiaCutout.ready()) busy(true,'أنزّل محرك عزل الملابس — مرة وحدة بس…');
+  return ClosiaCutout.analyse(src,p=>busy(true,`أنزّل محرك عزل الملابس — مرة وحدة بس… ${Math.round(p*100)}%`));
+}
+function cutoutAlpha(an,src,cat){ return ClosiaCutout.alpha(an,ctx2d(src).getImageData(0,0,src.width,src.height).data,cat||'top'); }
 // Turn picture blobs into draft items (AI cut-out → editor). meta pre-fills fields.
 async function intake(sources,opts={}){
   const drafts=[]; let aiOk=S.set.aiBg!==false, aiFailed=false;
   for(let n=0;n<sources.length;n++){
     const {blob,meta={}}=sources[n], lbl=sources.length>1?` (${n+1} / ${sources.length})`:'';
-    busy(true,(aiOk?'✨ أشيل الخلفية بالذكاء الاصطناعي…':'أشيل الخلفية وأعرف اللون…')+lbl);
+    busy(true,(aiOk?'✨ أعزل القطعة بالذكاء الاصطناعي…':'أشيل الخلفية وأعرف اللون…')+lbl);
     await new Promise(r=>setTimeout(r,30));
     const u=URL.createObjectURL(blob);
     try{
-      const im=await loadImg(u), src=srcFromImage(im); let alpha=null, kind=null;
-      if(aiOk){ try{ alpha=await aiAlpha(src,p=>busy(true,`أنزّل محرك الذكاء الاصطناعي — مرة وحدة بس… ${Math.round(p*100)}%`)); kind='ai'; }
-        catch(err){ console.warn('AI background removal failed',err); aiOk=false; aiFailed=true; } }
+      const im=await loadImg(u), src=srcFromImage(im); let alpha=null, kind=null, an=null, cat=meta.cat||null, matte=null;
+      if(aiOk){
+        try{ an=await cutoutAnalyse(src); cat=cat||ClosiaCutout.guessCategory(an); alpha=cutoutAlpha(an,src,cat); kind='ai2';
+          matte=Uint8ClampedArray.from(an.alpha,v=>v*255); }
+        catch(err){ console.warn('garment engine failed, trying matte only',err); an=null;
+          try{ alpha=await aiAlpha(src,p=>busy(true,`أنزّل محرك الذكاء الاصطناعي — مرة وحدة بس… ${Math.round(p*100)}%`)); kind='ai'; matte=alpha; }
+          catch(e2){ console.warn('AI background removal failed',e2); aiOk=false; aiFailed=true; } } }
       if(!alpha){ busy(true,'أشيل الخلفية وأعرف اللون…'+lbl); await new Promise(r=>setTimeout(r,20)); alpha=classicAlpha(src); kind=alpha?'classic':null; }
-      const it={id:uid(),_src:src,_alpha:alpha,_colorAuto:true,maskKind:kind,enh:!meta.store,bright:0,useCut:!!alpha,
+      const it={id:uid(),_src:src,_alpha:alpha,_an:an,_matte:matte,_colorAuto:true,maskKind:kind,enh:!meta.store,bright:0,useCut:!!alpha,
         name:meta.name||'',brand:meta.brand||'',price:meta.price||'',size:'',tags:[],seasons:['all'],occs:[],fav:false,laundry:false,wears:0,lastWorn:0,added:Date.now()+n,
         ...(meta.url?{url:meta.url}:{}),...(meta.sourceImage?{sourceImage:meta.sourceImage}:{}),...(opts.wish?{wish:true}:{})};
-      recompose(it);
-      it.cat=meta.cat||(S.closet.cat!=='all'&&CAT[S.closet.cat]?S.closet.cat:(it.ar<.75?'shoes':it.ar>1.45?'bottom':'top'));
+      recompose(it,true);
+      it.cat=cat||(S.closet.cat!=='all'&&CAT[S.closet.cat]?S.closet.cat:(it.ar<.75?'shoes':it.ar>1.45?'bottom':'top'));
       drafts.push(it);
     }catch(err){ console.warn(err); }
     URL.revokeObjectURL(u);
@@ -1048,7 +1060,7 @@ async function editItem(list,i,isNew){
     ${it._src?`<div class="imgtools">
       <div class="seg ${it._alpha?'':'hidden'}" id="eBg"><button class="${it.useCut!==false?'on':''}" data-v="1">✂️ بدون خلفية</button><button class="${it.useCut!==false?'':'on'}" data-v="0">🖼️ الأصلية</button></div>
       ${!it._alpha?`<p class="hint" style="margin:0">ما قدرت أشيل الخلفية تلقائياً — جرّب الذكاء الاصطناعي أو امسحها بيدك.</p>`:''}
-      <div class="row">${it.maskKind!=='ai'?`<button class="btn" id="eAI">✨ شيل الخلفية بالذكاء الاصطناعي</button>`:''}<button class="btn" id="eTouch">🖌️ تعديل يدوي</button></div>
+      <div class="row">${it.maskKind!=='ai'&&it.maskKind!=='ai2'?`<button class="btn" id="eAI">✨ اعزل القطعة بالذكاء الاصطناعي</button>`:''}<button class="btn" id="eTouch">🖌️ تعديل يدوي</button></div>
       <label class="tgl"><input type="checkbox" id="eEnh" ${it.enh!==false?'checked':''}><span>✨ تحسين تلقائي للإضاءة والألوان</span></label>
       <div class="slider"><span>🔅</span><input type="range" id="eBright" min="-0.5" max="0.5" step="0.05" value="${it.bright||0}"><span>🔆</span></div>
     </div>`:''}
@@ -1078,7 +1090,8 @@ async function editItem(list,i,isNew){
     </div>`);
   const single=(box,fn)=>$(box).onclick=e=>{ const b=e.target.closest('[data-v]'); if(!b) return;
     $(box).querySelectorAll('[data-v]').forEach(x=>x.classList.toggle('on',x===b)); fn(b.dataset.v); };
-  single('eCat',v=>{ it.cat=v; $('eName').placeholder=CAT[v].ph; });
+  single('eCat',v=>{ it.cat=v; $('eName').placeholder=CAT[v].ph;
+    if(it._an&&ClosiaCutout.onModel(it._an)){ it._alpha=cutoutAlpha(it._an,it._src,v); it.useCut=true; refresh(); toast('عزلت '+CAT[v].ar+' من الصورة ✓'); } });
   single('eCol',v=>{ it.color=v; it._colorAuto=$('eAuto').classList.contains('on'); $('eCName').textContent=colorInfo(v).name; });
   const refresh=()=>{ recompose(it); $('ePrev').src=it.img; $('ePrev').className=it.cut?'':'full';
     if(it._colorAuto){ $('eAuto').dataset.v=it.color; $('eAuto').style.background=it.color; $('eCName').textContent=colorInfo(it.color).name; } };
@@ -1090,7 +1103,8 @@ async function editItem(list,i,isNew){
       $('eBg').querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.v==='1')); });
     if($('eAI')) $('eAI').onclick=async()=>{
       busy(true,'✨ أشيل الخلفية بالذكاء الاصطناعي…');
-      try{ it._alpha=await aiAlpha(it._src,p=>busy(true,`أنزّل محرك الذكاء الاصطناعي — مرة وحدة بس… ${Math.round(p*100)}%`)); it.maskKind='ai'; it.useCut=true; busy(false); editItem(list,i,isNew); }
+      try{ it._an=await cutoutAnalyse(it._src); it._alpha=cutoutAlpha(it._an,it._src,it.cat); it._matte=Uint8ClampedArray.from(it._an.alpha,v=>v*255);
+        it.maskKind='ai2'; it.useCut=true; recompose(it,true); busy(false); editItem(list,i,isNew); }
       catch(e){ console.warn(e); busy(false); toast('ما قدرت — تأكد إنك متصل بالنت أول مرة'); } };
   }
   single('eSea',v=>{ it.seasons=[v]; });
@@ -1100,7 +1114,7 @@ async function editItem(list,i,isNew){
   $('eSave').onclick=async()=>{
     it.name=$('eName').value.trim(); it.brand=$('eBrand').value.trim(); it.size=$('eSize').value.trim();
     it.price=$('ePrice').value.replace(/[^\d.]/g,''); it.tags=$('eTags').value.split(/[,،]/).map(s=>s.trim()).filter(Boolean);
-    if(it._src){ it.src=it._src.toDataURL('image/jpeg',.85); it.mask=it._alpha?alphaToURL(it._alpha,it._src.width,it._src.height):null; }
+    if(it._src){ recompose(it,true); it.src=it._src.toDataURL('image/jpeg',.88); it.mask=it._alpha?alphaToURL(it._alpha,it._src.width,it._src.height):null; }
     const rec={}; for(const k in it) if(k[0]!=='_') rec[k]=it[k];
     if(rec.wish){ await DB.put('wish',rec); const k=S.wish.findIndex(x=>x.id===rec.id); if(k<0) S.wish.push(rec); else S.wish[k]=rec;
       toast('انضافت للأمنيات 🤍'); if(isNew&&i<list.length-1) return next(); closeSheet(); return wishSheet(rec); }
@@ -1289,7 +1303,8 @@ $('bTools').onclick=e=>{ const b=e.target.closest('[data-a]'); if(!b||!B.sel) re
 /* ---------------- manual touch-up (erase / restore / rotate) ---------------- */
 const TU={};
 function openTouch(it,onDone){
-  Object.assign(TU,{it,onDone,src:it._src,orig:it._alpha?new Uint8ClampedArray(it._alpha):null,mode:'erase',undo:[]});
+  Object.assign(TU,{it,onDone,src:it._src,orig:it._alpha?new Uint8ClampedArray(it._alpha):null,mode:'erase',undo:[],matte:it._matte||null});
+  $('tMode').querySelector('[data-v="smart"]').classList.toggle('hidden',!it._matte);
   TU.alpha=it._alpha?new Uint8ClampedArray(it._alpha):new Uint8ClampedArray(it._src.width*it._src.height).fill(255);
   $('tMode').querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.v==='erase'));
   $('touch').classList.add('on'); requestAnimationFrame(()=>{ tuPrep(); tuFit(); tuDraw(); });
@@ -1304,27 +1319,45 @@ function tuPrep(){
 function tuFit(){
   const st=$('tStage').getBoundingClientRect(), w=TU.src.width, h=TU.src.height;
   const k=Math.min((st.width-32)/w,(st.height-12)/h); $('tCv').style.width=w*k+'px'; $('tCv').style.height=h*k+'px'; TU.k=k;
+  tuZoom(1,0,0);
 }
+function tuZoom(z,tx,ty){ TU.z=z; TU.tx=tx; TU.ty=ty; $('tCv').style.transform=`translate(${tx}px,${ty}px) scale(${z})`; $('tZoom').classList.toggle('hidden',z<=1.01); }
 function tuDraw(){ const d=TU.out.data, a=TU.alpha; for(let i=0;i<a.length;i++) d[i*4+3]=a[i]; $('tTop').getContext('2d').putImageData(TU.out,0,0); }
-function tuPaint(x,y){
-  const w=TU.src.width,h=TU.src.height, r=+$('tSize').value/TU.k/2, a=TU.alpha, er=TU.mode==='erase';
+function tuPaint(x,y,r){
+  const w=TU.src.width,h=TU.src.height, a=TU.alpha, mode=TU.mode, m=TU.matte;
   const x0=Math.max(0,Math.floor(x-r)),x1=Math.min(w-1,Math.ceil(x+r)),y0=Math.max(0,Math.floor(y-r)),y1=Math.min(h-1,Math.ceil(y+r));
   for(let yy=y0;yy<=y1;yy++) for(let xx=x0;xx<=x1;xx++){ const dd=Math.hypot(xx-x,yy-y); if(dd>r) continue;
-    const f=clamp((r-dd)/(r*.35),0,1), i=yy*w+xx; a[i]=er?Math.min(a[i],255*(1-f)):Math.max(a[i],255*f); }
+    const f=clamp((r-dd)/(r*.35),0,1), i=yy*w+xx;
+    if(mode==='erase') a[i]=Math.min(a[i],255*(1-f));
+    else if(mode==='smart'&&m) a[i]=Math.max(a[i],m[i]*f);      // restore along the AI matte's own edges
+    else a[i]=Math.max(a[i],255*f); }
 }
 (()=>{
-  const cv=$('tCv'), cur=$('tCur'); let last=null, raf=0;
-  const pos=e=>{ const r=cv.getBoundingClientRect(); return {x:(e.clientX-r.left)/TU.k,y:(e.clientY-r.top)/TU.k,cx:e.clientX-r.left,cy:e.clientY-r.top}; };
-  const showCur=p=>{ const s=+$('tSize').value; Object.assign(cur.style,{display:'block',left:p.cx+'px',top:p.cy+'px',width:s+'px',height:s+'px'}); };
-  cv.addEventListener('pointerdown',e=>{ cv.setPointerCapture(e.pointerId); TU.undo.push(new Uint8ClampedArray(TU.alpha)); if(TU.undo.length>20) TU.undo.shift();
-    const p=pos(e); last=p; tuPaint(p.x,p.y); tuDraw(); showCur(p); });
-  cv.addEventListener('pointermove',e=>{ if(!last) return; const p=pos(e), r=+$('tSize').value/TU.k/2;
+  const cv=$('tCv'), cur=$('tCur'), pts=new Map(); let last=null, raf=0, pinch=null;
+  const scale=()=>cv.getBoundingClientRect().width/TU.src.width;
+  const pos=e=>{ const r=cv.getBoundingClientRect(), s=r.width/TU.src.width; return {x:(e.clientX-r.left)/s,y:(e.clientY-r.top)/s,cx:(e.clientX-r.left)/TU.z,cy:(e.clientY-r.top)/TU.z}; };
+  const brush=()=>+$('tSize').value/2/scale();
+  const showCur=p=>{ const s=+$('tSize').value/TU.z; Object.assign(cur.style,{display:'block',left:p.cx+'px',top:p.cy+'px',width:s+'px',height:s+'px',borderWidth:2/TU.z+'px'}); };
+  cv.addEventListener('pointerdown',e=>{ cv.setPointerCapture(e.pointerId); pts.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(pts.size===2){ // second finger: undo the dot of the first and start pinch-zoom
+      if(last){ const u=TU.undo.pop(); if(u) TU.alpha=u; last=null; cur.style.display='none'; tuDraw(); }
+      const [a,b]=[...pts.values()], r=cv.getBoundingClientRect();
+      pinch={d0:Math.hypot(a.x-b.x,a.y-b.y),z0:TU.z,mx:(a.x+b.x)/2,my:(a.y+b.y)/2,lx:r.left-TU.tx,ly:r.top-TU.ty,tx0:TU.tx,ty0:TU.ty}; return; }
+    if(pts.size>2) return;
+    TU.undo.push(new Uint8ClampedArray(TU.alpha)); if(TU.undo.length>20) TU.undo.shift();
+    const p=pos(e); last=p; tuPaint(p.x,p.y,brush()); tuDraw(); showCur(p); });
+  cv.addEventListener('pointermove',e=>{ if(!pts.has(e.pointerId)) return; pts.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(pinch&&pts.size>=2){ const [a,b]=[...pts.values()], z=clamp(pinch.z0*Math.hypot(a.x-b.x,a.y-b.y)/pinch.d0,1,6);
+      const mx=(a.x+b.x)/2, my=(a.y+b.y)/2, px=(pinch.mx-pinch.lx-pinch.tx0)/pinch.z0, py=(pinch.my-pinch.ly-pinch.ty0)/pinch.z0;
+      tuZoom(z,mx-pinch.lx-px*z,my-pinch.ly-py*z); return; }
+    if(!last) return; const p=pos(e), r=brush();
     const n=Math.max(1,Math.ceil(Math.hypot(p.x-last.x,p.y-last.y)/(r/3)));
-    for(let k=1;k<=n;k++) tuPaint(last.x+(p.x-last.x)*k/n,last.y+(p.y-last.y)*k/n);
+    for(let k=1;k<=n;k++) tuPaint(last.x+(p.x-last.x)*k/n,last.y+(p.y-last.y)*k/n,r);
     last=p; showCur(p); cancelAnimationFrame(raf); raf=requestAnimationFrame(tuDraw); });
-  const end=()=>{ last=null; cur.style.display='none'; tuDraw(); };
+  const end=e=>{ pts.delete(e.pointerId); if(pts.size<2) pinch=null; if(!pts.size){ last=null; cur.style.display='none'; tuDraw(); } };
   cv.addEventListener('pointerup',end); cv.addEventListener('pointercancel',end);
 })();
+$('tZoom').onclick=()=>tuZoom(1,0,0);
 $('tMode').onclick=e=>{ const b=e.target.closest('[data-v]'); if(!b) return; TU.mode=b.dataset.v; $('tMode').querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b)); };
 $('tUndo').onclick=()=>{ const a=TU.undo.pop(); if(a&&a.length===TU.alpha.length){ TU.alpha=a; tuDraw(); } };
 $('tReset').onclick=()=>{ TU.undo.push(new Uint8ClampedArray(TU.alpha)); TU.alpha=TU.orig&&TU.orig.length===TU.alpha.length?new Uint8ClampedArray(TU.orig):TU.alpha.fill(255); tuDraw(); };
@@ -1332,9 +1365,10 @@ $('tRot').onclick=()=>{ // rotate photo and mask 90° clockwise
   const w=TU.src.width,h=TU.src.height, c=mkCanvas(h,w), x=c.getContext('2d');
   x.translate(h,0); x.rotate(Math.PI/2); x.drawImage(TU.src,0,0); TU.src=c;
   const a=new Uint8ClampedArray(w*h); for(let y=0;y<h;y++) for(let xx=0;xx<w;xx++) a[xx*h+(h-1-y)]=TU.alpha[y*w+xx];
+  if(TU.matte){ const m=new Uint8ClampedArray(w*h); for(let y=0;y<h;y++) for(let xx=0;xx<w;xx++) m[xx*h+(h-1-y)]=TU.matte[y*w+xx]; TU.matte=m; }
   TU.alpha=a; TU.undo=[]; TU.orig=null; tuPrep(); tuFit(); tuDraw(); };
 $('tCancel').onclick=()=>$('touch').classList.remove('on');
-$('tDone').onclick=()=>{ const it=TU.it; it._src=TU.src; it._alpha=TU.alpha; it.maskKind='manual'; $('touch').classList.remove('on'); TU.onDone&&TU.onDone(); };
+$('tDone').onclick=()=>{ const it=TU.it; it._src=TU.src; it._alpha=TU.alpha; it._matte=TU.matte; it.maskKind='manual'; $('touch').classList.remove('on'); TU.onDone&&TU.onDone(); };
 addEventListener('resize',()=>{ if($('touch').classList.contains('on')) tuFit(); });
 
 /* ================= extras: wishlist, closet review, category picker, basics library, sharing ================= */
@@ -1753,8 +1787,8 @@ $('settingsBtn').onclick=()=>{
       <p class="hint" style="margin-top:6px">${hasApi()?'✓ الاستيراد التلقائي مفعّل':'الاستيراد التلقائي يحتاج خدمة Closia (Vercel). بدونها تقدر تستخدم زر سفاري أو تلصق الصورة.'}</p>
       <div class="row"><button class="btn" id="sSafari">🧭 زر سفاري</button><button class="btn" id="sLog">🧾 سجل الاستيراد</button></div></div>
     <div class="field"><label>إزالة الخلفية</label>
-      <label class="tgl"><input type="checkbox" id="sAI" ${S.set.aiBg!==false?'checked':''}><span>✨ بالذكاء الاصطناعي (أدق — يشتغل على أي خلفية)</span></label>
-      <p class="hint" style="margin-top:6px">أول مرة ينزّل محرك صغير (~٤٠ ميقا) ويشتغل بعدها على جوالك بدون نت. صورك ما تطلع من جوالك أبد.</p></div>
+      <label class="tgl"><input type="checkbox" id="sAI" ${S.set.aiBg!==false?'checked':''}><span>✨ عزل القطعة بالذكاء الاصطناعي (احترافي — يفصل الملابس حتى لو أحد لابسها)</span></label>
+      <p class="hint" style="margin-top:6px">أول مرة ينزّل المحرك (~٧٥ ميقا) ويشتغل بعدها على جوالك بدون نت. صورك ما تطلع من جوالك أبد.</p></div>
     <div class="field"><label>الجو</label><button class="btn block" id="sWx">${IC.pin} ${S.set.wxOn?'تحديث الجو من موقعي':'استخدم موقعي لجو حقيقي'}</button>
       <p class="hint" style="margin-top:6px">موقعك يروح بس لخدمة الطقس المجانية Open-Meteo، وما ينحفظ.</p></div>
     <div class="field"><label>النسخة الاحتياطية</label>
