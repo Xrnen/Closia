@@ -478,6 +478,24 @@ body.home header.top{display:none}
 .rvbtns b{font-size:14px}
 #lbPrev img{padding:10%}
 a.btn{text-decoration:none}
+.impfail{text-align:center;padding:18px 6px 4px}
+.impfail .ic{font-size:30px;width:64px;height:64px;border-radius:50%;background:var(--surface);border:1px solid var(--line);display:grid;place-items:center;margin:0 auto 10px}
+.impfail h3{font-size:18px;font-weight:800;margin-bottom:6px}
+.impcard{display:flex;gap:14px;align-items:center;background:var(--surface);border:1px solid var(--line);border-radius:22px;padding:10px;margin-top:14px}
+.impimg{width:96px;aspect-ratio:3/4;border-radius:16px;background:#F3F3F3;overflow:hidden;flex:none}
+.impimg img{width:100%;height:100%;object-fit:cover}
+.impcard .tx{display:flex;flex-direction:column;gap:4px;min-width:0}
+.impcard .store{font-size:12px;color:var(--muted);font-weight:600;letter-spacing:.3px}
+.impcard b{font-size:15px;line-height:1.5;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.impcard .price{font-weight:800;font-size:16px}
+.steps{padding-inline-start:20px;line-height:1.9;font-size:14px;margin:12px 0 16px}
+.steps li{margin-bottom:6px}
+.implog{display:grid;gap:8px}
+.implog>div{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:10px 12px;display:grid;gap:2px}
+.implog b{font-size:14px}
+.implog .bad b{color:var(--bad)}
+.implog span{font-size:13px}
+.implog small{font-size:11.5px;color:var(--muted)}
 </style>
 </head>
 <body>
@@ -543,6 +561,7 @@ a.btn{text-decoration:none}
 <div class="toast" id="toast"></div>
 <div class="busy hidden" id="busy"><div class="bx"><div class="spin"></div><div id="busyTx">لحظة…</div></div></div>
 
+<script src="config.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

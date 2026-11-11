@@ -1,0 +1,12 @@
+{
+  "name": "closia",
+  "private": true,
+  "type": "module",
+  "description": "Closia — digital wardrobe and outfit stylist (static PWA + product import API)",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "node server/dev.mjs",
+    "test": "node --test test/*.test.js",
+    "check:live": "node scripts/live-check.mjs"
+  }
+}

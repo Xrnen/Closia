@@ -1,0 +1,6 @@
+{
+  "functions": { "api/*.js": { "maxDuration": 25 } },
+  "headers": [
+    { "source": "/sw.js", "headers": [{ "key": "cache-control", "value": "no-cache" }] }
+  ]
+}
