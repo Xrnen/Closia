@@ -99,7 +99,7 @@ const S = {
   view:'closet',
   closet:{cat:'all', q:'', color:null, sort:'new', laundry:false, tab:'items'}, hero:null,
   oTab:'style', occ:'casual', wx:null, wxManual:false, wxInfo:null, planDate:null,
-  results:[], idx:0, locks:{}, look:'all', shown:new Set(),
+  results:[], idx:0, locks:{}, look:'all', vibe:'all', shown:new Set(),
   pTab:'cal', cal:{y:now0.getFullYear(), m:now0.getMonth()},
 };
 
@@ -482,8 +482,117 @@ function evalLooks(ps,occ){
   // one-piece
   if(full&&shoes&&(!bag||isNeu(bag)||sameColor(ci(bag),ci(shoes)))&&core.filter(p=>p!==full).every(p=>isNeu(p)||sameTone(ci(p),ci(full))))
     add('onepiece',1,bag&&sameColor(ci(bag),ci(shoes))?'الشنطة والحذاء نفس اللون — لمسة فخمة':'القطعة الكاملة هي البطل والباقي ناعم');
+  out.push(...evalCreative(ps,occ));
   return out.sort((a,b)=>b.v-a.v);
 }
+
+/* ---------- creative stylist: fabrics, vibes, creative formulas, stylist notes ---------- */
+const FABRICS = [
+  {id:'cotton',ar:'قطن',w:2,tex:'smooth'},{id:'linen',ar:'كتان',w:1,tex:'slub'},{id:'denim',ar:'جينز',w:3,tex:'rugged'},
+  {id:'knit',ar:'تريكو/صوف',w:4,tex:'knit'},{id:'leather',ar:'جلد',w:4,tex:'leather',sheen:1},{id:'silk',ar:'حرير/ساتان',w:1,tex:'silk',sheen:2},
+  {id:'sheer',ar:'شيفون/شفاف',w:1,tex:'sheer'},{id:'lace',ar:'دانتيل',w:1,tex:'lace'},{id:'fur',ar:'فرو',w:5,tex:'fur'},
+  {id:'velvet',ar:'مخمل',w:4,tex:'velvet',sheen:1},{id:'tech',ar:'رياضي',w:2,tex:'tech'},
+];
+const FAB = Object.fromEntries(FABRICS.map(f=>[f.id,f]));
+const FAB_KW = [
+  ['silk',/حرير|ساتان|ستان|silk|satin/i],['linen',/كتان|linen/i],['denim',/جينز|دنيم|denim|jean/i],
+  ['knit',/صوف|تريكو|كنزة|سويتر|كشمير|knit|wool|cashmere|cardigan|كارديغ/i],['leather',/جلد|leather|suede|شمواه/i],
+  ['sheer',/شيفون|شفاف|تول|اورجانزا|chiffon|sheer|mesh|organza|tulle/i],['lace',/دانتيل|lace/i],['fur',/فرو|fur|shearling|faux fur/i],
+  ['velvet',/مخمل|velvet/i],['tech',/رياضي|جيم|نايلون|tech|nylon|sport|track/i],
+];
+function guessFabric(it){
+  const t=(it.name||'')+' '+(it.tags||[]).join(' ');
+  for(const [id,re] of FAB_KW) if(re.test(t)) return id;
+  if(patOf(it)==='denim') return 'denim'; if(styleOf(it)==='sport') return 'tech';
+  return 'cotton';
+}
+const fabOf = it => FAB[it.fabric||guessFabric(it)]||FAB.cotton;
+
+const VIBES = [
+  {id:'casual', e:'☕', ar:'كاجوال',   d:'مريح ومرتب ليومك العادي.',          target:2.4, like:{casual:1,street:.4,smart:.4,sport:.1}},
+  {id:'elegant',e:'🥂', ar:'أنيق',     d:'قصّات نظيفة وخامات راقية.',          target:4.2, like:{classic:1,evening:1,smart:.6,trad:.7}, fab:{silk:.8,velvet:.6,lace:.5,knit:.4,leather:.3}},
+  {id:'street', e:'🧢', ar:'ستريت وير', d:'قصّات واسعة وسنيكرز وثقة.',         target:2,   like:{street:1,sport:.6,casual:.5}},
+  {id:'chic',   e:'🖤', ar:'شيك',      d:'المرتّب مع لمسة عصرية غير متوقعة.',  target:3.3, like:{smart:1,classic:.7,evening:.4,casual:.3}},
+  {id:'bold',   e:'⚡', ar:'جريء',     d:'تركيبات ما خطرت على بالك — بس مدروسة.', target:null, like:null},
+];
+const VIBE = Object.fromEntries(VIBES.map(v=>[v.id,v]));
+const CREATIVE = new Set(['highlow','texture','patternmix','colorblock','headtotoe','bold','sandwich','denim']);
+
+// Extra (creative) formulas evaluated next to the classic trend looks.
+function evalCreative(ps,occ){
+  const g=c=>ps.find(p=>p.cat===c), shoes=g('shoes');
+  const main=ps.filter(p=>['top','bottom','full','outer'].includes(p.cat)), core=shoes?[...main,shoes]:main;
+  const ci=p=>colorInfo(p.color), out=[], add=(id,v,why)=>out.push({id,v,why});
+  const fs=core.map(formOf), hi=core.find(p=>formOf(p)>=4), lo=core.find(p=>formOf(p)<=2);
+  if(hi&&lo&&main.length>=2) add('highlow',1,`${itemName(hi).split(' · ')[0]} الرسمي مع ${itemName(lo).split(' · ')[0]} المريح — توازن «هاي-لو» عصري`);
+  const tex=[...new Set(main.map(p=>fabOf(p).tex))];
+  if(tex.length>=2&&main.length>=2&&(main.every(isNeu)||main.every(p=>sameTone(ci(p),ci(main[0])))))
+    add('texture',1,`لعب بالخامات: ${[...new Set(main.map(p=>fabOf(p).ar))].slice(0,3).join(' + ')} بنفس الدرجات — عمق بدون ضجة`);
+  const pats=main.filter(p=>!['solid','denim'].includes(patOf(p)));
+  if(pats.length===2&&patOf(pats[0])!==patOf(pats[1])){
+    const share=sameColor(ci(pats[0]),ci(pats[1]))||(pats[0].color2&&sameColor(colorInfo(pats[0].color2),ci(pats[1])))||(pats[1].color2&&sameColor(colorInfo(pats[1].color2),ci(pats[0])));
+    if(share) add('patternmix',1,'نقشتين مختلفتين يجمعهم لون واحد — مزج نقشات بطريقة المحترفين'); }
+  const louds=main.filter(p=>!isNeu(p)&&patOf(p)==='solid'), names=[...new Set(louds.map(p=>ci(p).name))];
+  if(names.length>=2&&names.length<=3&&louds.length>=2){ const h=harmony(ci(louds[0]),ci(louds[1]));
+    if(h.k==='comp'||h.k==='triad'||h.k==='analog') add('colorblock',.9,`بلوك ألوان: ${names.join(' + ')} بقطع سادة كبيرة`); }
+  if(core.length>=3&&core.every(p=>sameTone(ci(p),ci(core[0])))&&!core.every(p=>GREY_N.has(ci(p).name)))
+    add('headtotoe',1,`مونوكروم كامل من الراس للحذاء بدرجات ${ci(core[0]).name}`);
+  return out;
+}
+LOOKS.push(
+  {id:'highlow',   e:'🎭', ar:'هاي-لو',         d:'قطعة رسمية مع قطعة رياضية أو مريحة — توازن الستايلستات العصري.'},
+  {id:'texture',   e:'🧶', ar:'لعب بالخامات',   d:'خامات مختلفة بنفس الألوان تعطي عمق وفخامة.'},
+  {id:'patternmix',e:'🌀', ar:'مزج نقشات',      d:'نقشتين يجمعهم لون — جريء ومدروس.'},
+  {id:'colorblock',e:'🟧', ar:'بلوك ألوان',     d:'ألوان قوية بقطع سادة كبيرة متناسقة على عجلة الألوان.'},
+  {id:'headtotoe', e:'🎨', ar:'مونوكروم كامل',  d:'لون واحد من الراس للحذاء — أقوى إطلالة بأقل مجهود.'},
+);
+LOOKS.forEach(l=>LOOK[l.id]=l);
+
+function vibeScore(ps,vibe){
+  const v=VIBE[vibe]; if(!v) return 0;
+  const main=ps.filter(p=>['top','bottom','full','outer'].includes(p.cat)), shoes=ps.find(p=>p.cat==='shoes'), core=shoes?[...main,shoes]:main;
+  if(!core.length) return 0;
+  let s=0;
+  if(v.like){ s+=core.reduce((a,p)=>a+(v.like[styleOf(p)]??-.8),0)/core.length*2.6;
+    const f=core.reduce((a,p)=>a+formOf(p),0)/core.length; s-=Math.abs(f-v.target)*1.1; }
+  if(v.fab) s+=Math.min(1.2,main.reduce((a,p)=>a+(v.fab[fabOf(p).id]||0),0));
+  if(vibe==='street'){ if(main.some(p=>fitOf(p)==='loose')) s+=1; if(shoes&&['casual','street','sport'].includes(styleOf(shoes))) s+=.8;
+    s-=main.filter(p=>['classic','evening'].includes(styleOf(p))).length*.9; }
+  if(vibe==='chic'){ if(core.filter(isNeu).length/core.length>=.6) s+=.6; if(ps.some(p=>p.cat==='acc'||p.cat==='bag')) s+=.4;
+    if(new Set(main.map(p=>fabOf(p).tex)).size>=2) s+=.5; }
+  if(vibe==='elegant'&&shoes&&['casual','street','sport'].includes(styleOf(shoes))) s-=.8;
+  if(vibe==='bold'){ const t=taste(); let nov=0;
+    for(let i=0;i<ps.length;i++) for(let j=i+1;j<ps.length;j++) if(!t.pairs[pairKey(ps[i].id,ps[j].id)]) nov++;
+    s+=Math.min(1.5,nov*.3); s+=ps.filter(p=>(p.wears||0)<2).length*.2; }
+  return s;
+}
+
+// Concrete styling directions, like a stylist's notes.
+function stylistTips(ps,o){
+  const g=c=>ps.find(p=>p.cat===c), top=g('top'), bot=g('bottom'), full=g('full'), outer=g('outer'), shoes=g('shoes'), tips=[];
+  const nm=p=>p?(p.name||'').toLowerCase():'';
+  if(top&&bot&&fitOf(top)!=='slim'&&fitOf(bot)!=='loose') tips.push('دخّل طرف القطعة الفوقية من قدّام بس (French tuck) عشان يبان الخصر.');
+  if(top&&bot&&fitOf(top)==='loose'&&fitOf(bot)==='loose') tips.push('القطعتين واسعة — خلّ الحذاء هو اللي يعطي الشكل، وكمّل بإكسسوار واحد بارز.');
+  if(outer&&styleOf(outer)==='classic') tips.push('البس الجاكيت على الكتوف أو اسحب أكمامه لنص الذراع — لمسة شيك فورية.');
+  if(full&&outer) tips.push('حزام رفيع على الخصر فوق الجاكيت يرسم القوام.');
+  if(bot&&fitOf(bot)==='loose'&&shoes) tips.push('خلّ البنطلون يلمس الحذاء من قدّام — يطوّلك.');
+  if(/قميص|shirt/.test(nm(top))&&!outer) tips.push('افتح أول زرين واطوِ الأكمام مرتين — مرتب ومسترخي بنفس الوقت.');
+  if(o&&(o.look==='tonal'||o.look==='headtotoe')) tips.push('مع التدرّج اللوني، إكسسوار معدني واحد يكفي ويخطف العين.');
+  if(o&&o.look==='highlow') tips.push('خلّ القطعة الرسمية مكوية ونظيفة — التباين هو سر هاللوك.');
+  if(ps.some(p=>!['solid','denim'].includes(patOf(p)))) tips.push('النقشة هي البطلة — خلّ المجوهرات بسيطة.');
+  return tips.slice(0,2);
+}
+// What would finish the look if the closet does not have it.
+function missingSuggestions(ps,occ){
+  const has=c=>ps.some(p=>p.cat===c), out=[], ci=p=>colorInfo(p.color);
+  const warm=ps.filter(p=>WARM_N.has(ci(p).name)||EARTH.has(ci(p).name)).length>=ps.length/2;
+  const shoes=ps.find(p=>p.cat==='shoes');
+  if(!has('shoes')) out.push(`حذاء ${['work','event','out'].includes(occ)?'لوفر أو كعب':'سنيكرز'} ${warm?'بني أو بيج':'أبيض أو أسود'}`);
+  if(!has('bag')&&['out','event','work'].includes(occ)) out.push(`شنطة صغيرة ${shoes?'بلون الحذاء ('+ci(shoes).name+')':'محايدة'}`);
+  if(!has('acc')) out.push(warm?'إكسسوار ذهبي ناعم (حلق أو سلسال)':'ساعة أو إكسسوار فضي');
+  return out.slice(0,2);
+}
+const favColorBonus = ps => { const f=S.set.favColors||[]; if(!f.length) return 0; return Math.min(1.1,ps.filter(p=>f.includes(colorInfo(p.color).family)).length*.35); };
 
 function taste(){ if(!S.set.taste) S.set.taste={looks:{},pairs:{}}; return S.set.taste; }
 const pairKey=(a,b)=>a<b?a+'|'+b:b+'|'+a;
@@ -494,7 +603,7 @@ async function learn(pieces,look,w=1){
   await saveSet();
 }
 
-function scoreOutfit(ps,{occ,wx,bonus,ignoreRecent}){
+function scoreOutfit(ps,{occ,wx,bonus,ignoreRecent,vibe}){
   const g=c=>ps.find(p=>p.cat===c), top=g('top'), bot=g('bottom'), shoes=g('shoes');
   const main=ps.filter(p=>['top','bottom','full','outer'].includes(p.cat)), core=shoes?[...main,shoes]:main;
   const ci=p=>colorInfo(p.color); let s=0; const why=[];
@@ -507,7 +616,8 @@ function scoreOutfit(ps,{occ,wx,bonus,ignoreRecent}){
     else if(Math.abs(a.l-b.l)>.3) why.push('تباين حلو بين فوق وتحت'); }
   // patterns: one statement at a time
   const pats=main.filter(p=>!['solid','denim'].includes(patOf(p)));
-  if(pats.length>1) s-=3; else if(pats.length===1&&main.length>1) why.push(`النقشة وحدة (${PATTERNS.find(x=>x.id===patOf(pats[0])).ar}) والباقي سادة`);
+  const mixOk=pats.length===2&&evalCreative(ps,occ).some(l=>l.id==='patternmix');
+  if(pats.length>1&&!mixOk) s-=3; else if(pats.length===1&&main.length>1) why.push(`النقشة وحدة (${PATTERNS.find(x=>x.id===patOf(pats[0])).ar}) والباقي سادة`);
   // formality fits the occasion and pieces agree with each other
   if(core.length){
     const fs=core.map(formOf), avg=fs.reduce((a,b)=>a+b,0)/fs.length;
@@ -530,10 +640,18 @@ function scoreOutfit(ps,{occ,wx,bonus,ignoreRecent}){
     if(bonus&&bonus.has(p.id)) s+=1.4;
   }
   if(wx==='mild'&&ps.some(p=>p.cat==='outer')) s-=.5;
+  // fabrics: weather comfort and texture contrast
+  for(const p of main){ const f=fabOf(p);
+    if(wx==='hot'&&f.w>=4&&p.cat!=='outer') s-=1; if(wx==='cold'&&f.w<=1&&!ps.some(q=>q.cat==='outer')) s-=.6; }
+  if(wx==='hot'&&main.length&&main.every(p=>fabOf(p).w<=2)) why.push('خامات خفيفة تناسب الحر');
+  { const sh=main.filter(p=>fabOf(p).sheen>=2), mt=main.filter(p=>['rugged','knit'].includes(fabOf(p).tex));
+    if(sh.length&&mt.length){ s+=.4; why.push(`${fabOf(sh[0]).ar} مع ${fabOf(mt[0]).ar} — تباين خامات راقي`); } }
+  s+=favColorBonus(ps);
+  if(vibe&&vibe!=='all') s+=vibeScore(ps,vibe);
   for(let i=0;i<ps.length;i++) for(let j=i+1;j<ps.length;j++){ const n=t.pairs[pairKey(ps[i].id,ps[j].id)]; if(n) s+=.25*Math.min(3,n); }
   // trend looks
   const looks=evalLooks(ps,occ);
-  if(looks[0]) s+=3*looks[0].v+.12*Math.log1p(t.looks[looks[0].id]||0)*3;
+  if(looks[0]) s+=3*looks[0].v+.12*Math.log1p(t.looks[looks[0].id]||0)*3+(vibe==='bold'&&CREATIVE.has(looks[0].id)?1.5:0);
   if(looks[1]) s+=.6*looks[1].v;
   return {s,looks,why};
 }
@@ -546,8 +664,8 @@ function bestAddOn(ps,list,opt){
 }
 
 function generate(opt={}){
-  const occ=opt.occ===undefined?S.occ:opt.occ, wx=opt.wx??S.wx, lockIds=opt.locks??S.locks, n=opt.n??6, want=opt.look??S.look;
-  const sopt={occ,wx,bonus:opt.bonus,ignoreRecent:opt.ignoreRecent};
+  const occ=opt.occ===undefined?S.occ:opt.occ, wx=opt.wx??S.wx, lockIds=opt.locks??S.locks, n=opt.n??6, want=opt.look??S.look, vibe=opt.vibe??S.vibe;
+  const sopt={occ,wx,bonus:opt.bonus,ignoreRecent:opt.ignoreRecent,vibe};
   const P={}; CATS.forEach(c=>P[c.id]=S.items.filter(i=>i.cat===c.id&&fits(i,occ,wx)));
   const L={}; for(const [c,id] of Object.entries(lockIds)){ const it=byId(id); if(it) L[c]=it; }
   const cores=[];
@@ -576,10 +694,11 @@ function generate(opt={}){
     const key=full.map(p=>p.id).sort().join('|'); if(res.has(key)) continue;
     const r=scoreOutfit(full,sopt);
     if(!opt.ignoreRecent&&recent.has(key)) r.s-=3;
-    if(opt.avoid&&opt.avoid.has(key)) r.s-=4;
+    if(opt.avoid&&opt.avoid.has(key)) r.s-=8;
     if(shown.has(key)) r.s-=1.2;
     r.s+=Math.random()*.35;
-    res.set(key,{pieces:full,key,...r,look:r.looks[0]?r.looks[0].id:null});
+    const cre=vibe==='bold'?r.looks.find(l=>CREATIVE.has(l.id)&&l.v>=.75):null;
+    res.set(key,{pieces:full,key,...r,vibe,look:cre?cre.id:r.looks[0]?r.looks[0].id:null});
   }
   let list=[...res.values()].sort((a,b)=>b.s-a.s);
   if(want&&want!=='all'){ const f=list.filter(o=>o.looks.some(l=>l.id===want&&l.v>=.5)); f.forEach(o=>o.look=want); list=f; }
@@ -607,7 +726,8 @@ function explain(o){
   parts.push(...o.why.slice(0,1));
   if(o.pieces.some(p=>p.cat==='outer')&&S.wx==='cold') parts.push('أضفت طبقة خارجية عشان البرد');
   const fresh=o.pieces.filter(p=>!p.wears).length; if(fresh&&S.items.some(i=>i.wears)) parts.push(fresh===1?'وفيه قطعة ما لبستها قبل — فرصتها':`وفيه ${fresh} قطع ما لبستها قبل`);
-  return {title:l?`${l.e} ${l.ar}`:'✨ تنسيق متوازن', desc:l?l.d:'ألوان متناسقة وقطع تمشي مع بعض.', points:parts.slice(0,3)};
+  return {title:l?`${l.e} ${l.ar}`:'✨ تنسيق متوازن', desc:l?l.d:'ألوان متناسقة وقطع تمشي مع بعض.', points:parts.slice(0,3),
+    vibe:VIBE[o.vibe]||null, tips:stylistTips(o.pieces,o), missing:missingSuggestions(o.pieces,S.occ), fabrics:[...new Set(o.pieces.filter(p=>['top','bottom','full','outer'].includes(p.cat)).map(p=>fabOf(p).ar))]};
 }
 const starsOf = s => { const n=s>=9.2?5:s>=7.6?4:s>=5.8?3:2; return '★'.repeat(n)+'☆'.repeat(5-n); };
 
@@ -1031,7 +1151,7 @@ function itemSheet(it){
     </div>
     ${inOutfits.length?`<div class="lbl">موجودة في ${inOutfits.length} أوتفت محفوظ</div>`:''}
     <div style="display:grid;gap:10px;margin-top:8px">
-      <button class="btn primary" id="iStyle">✨ نسّق عليها</button>
+      <button class="btn primary" id="iStyle">✨ نسّقها بـ ٤ ستايلات</button>
       <div class="row"><button class="btn" id="iLaundry">${it.laundry?'✓ طلعت من الغسيل':'🧺 بالغسيل'}</button><button class="btn" id="iEdit">${IC.edit} تعديل</button></div>
       ${it.out?`<button class="btn" id="iBack">↩️ رجّعها للخزانة (${it.out==='sell'?'كانت للبيع':'كانت للتبرع'})</button>`:''}
       <button class="btn danger" id="iDel">${IC.trash} حذف القطعة</button>
@@ -1040,7 +1160,7 @@ function itemSheet(it){
   $('iFav').onclick=async()=>{ it.fav=!it.fav; await DB.put('items',it); itemSheet(it); render(); };
   $('iLaundry').onclick=async()=>{ it.laundry=!it.laundry; await DB.put('items',it); S.results=[]; itemSheet(it); render(); toast(it.laundry?'حطيتها بالغسيل — ما بقترحها لين ترجع':'رجعت للخزانة ✓'); };
   $('iEdit').onclick=()=>editItem([{...it,tags:[...(it.tags||[])],occs:[...(it.occs||[])],seasons:[...(it.seasons||['all'])]}],0,false);
-  $('iStyle').onclick=()=>{ closeSheet(); S.locks={[it.cat]:it.id}; S.results=[]; S.oTab='style'; go('outfits'); };
+  $('iStyle').onclick=()=>pieceWaysSheet(it);
   $('iDel').onclick=async()=>{ if(!confirm('أكيد تبي تحذف القطعة؟')) return;
     await DB.del('items',it.id); S.items=S.items.filter(x=>x.id!==it.id);
     for(const o of S.outfits.filter(o=>o.ids.includes(it.id))){ o.ids=o.ids.filter(x=>x!==it.id); if(o.layout) o.layout=o.layout.filter(l=>l.id!==it.id);
@@ -1082,6 +1202,7 @@ async function editItem(list,i,isNew){
     <div class="field"><label>الستايل ${it.style?'':'<span style="opacity:.7">— خمّنته، عدّله إذا غلط</span>'}</label><div class="wrapchips" id="eSty">
       ${STYLES.map(x=>`<button class="chip ${styleOf(it)===x.id?'on':''}" data-v="${x.id}">${x.ar}</button>`).join('')}</div></div>
     <div class="field"><label>القصّة</label><div class="seg" id="eFit">${FITS.map(x=>`<button class="${fitOf(it)===x.id?'on':''}" data-v="${x.id}">${x.ar}</button>`).join('')}</div></div>
+    <div class="field"><label>الخامة ${it.fabric?'':'<span style="opacity:.7">— خمّنتها</span>'}</label><div class="wrapchips" id="eFab">${FABRICS.map(x=>`<button class="chip ${fabOf(it).id===x.id?'on':''}" data-v="${x.id}">${x.ar}</button>`).join('')}</div></div>
     <div class="field"><label>النقشة</label><div class="wrapchips" id="ePat">${PATTERNS.map(x=>`<button class="chip ${patOf(it)===x.id?'on':''}" data-v="${x.id}">${x.ar}</button>`).join('')}</div></div>
     <div class="field"><label>تاقات (افصل بفاصلة)</label><input class="inp" id="eTags" value="${esc((it.tags||[]).join('، '))}" placeholder="مثلاً: كتان، رسمي، هدية"></div>
     <div class="row" style="margin-top:6px">
@@ -1108,7 +1229,7 @@ async function editItem(list,i,isNew){
       catch(e){ console.warn(e); busy(false); toast('ما قدرت — تأكد إنك متصل بالنت أول مرة'); } };
   }
   single('eSea',v=>{ it.seasons=[v]; });
-  single('eSty',v=>{ it.style=v; }); single('eFit',v=>{ it.fit=v; }); single('ePat',v=>{ it.pattern=v; });
+  single('eSty',v=>{ it.style=v; }); single('eFab',v=>{ it.fabric=v; }); single('eFit',v=>{ it.fit=v; }); single('ePat',v=>{ it.pattern=v; });
   $('eOcc').onclick=e=>{ const b=e.target.closest('[data-v]'); if(!b) return; b.classList.toggle('on'); it.occs=[...$('eOcc').querySelectorAll('.on')].map(x=>x.dataset.v); };
   const next=()=>{ if(isNew&&i<list.length-1) editItem(list,i+1,true); else closeSheet(); };
   $('eSave').onclick=async()=>{
@@ -1153,19 +1274,26 @@ function renderStylist(){
     ${wxBarHTML()}
     <div class="chips" id="occPick">${OCCS.map(x=>`<button class="chip ${S.occ===x.id?'on':''}" data-v="${x.id}">${x.e} ${x.ar}</button>`).join('')}</div>
     <div class="seg" id="wxPick" style="margin-bottom:12px">${WX.map(w=>`<button class="${S.wx===w.id?'on':''}" data-v="${w.id}">${w.e} ${w.ar}</button>`).join('')}</div>
-    <div class="lbl">الستايل</div>
+    <div class="lbl">الإحساس</div>
+    <div class="vibes" id="vibePick"><button class="${S.vibe==='all'?'on':''}" data-v="all"><span>🪄</span>فاجئني</button>${VIBES.map(v=>`<button class="${S.vibe===v.id?'on':''}" data-v="${v.id}"><span>${v.e}</span>${v.ar}</button>`).join('')}</div>
+    <div class="lbl">الفورمولا</div>
     <div class="chips" id="lookPick"><button class="chip ${S.look==='all'?'on':''}" data-v="all">🪄 فاجئني</button>${LOOKS.map(l=>`<button class="chip ${S.look===l.id?'on':''}" data-v="${l.id}">${l.e} ${l.ar}</button>`).join('')}</div>`;
   if(!o){ b.innerHTML=head+`<div class="empty"><div class="big">🤔</div><h3>ما لقيت تركيبة تناسب</h3><p class="hint">${S.look!=='all'?`قطعك الحالية ما تكفي لستايل «${LOOK[S.look].ar}». جرّب «فاجئني» أو ستايل ثاني.`:'جرّب مناسبة أو جو ثاني، أو فك القفل.'}</p></div>`; bindStyleHead(); return; }
   const ps=sortPieces(o.pieces), saved=S.outfits.some(x=>x.key===o.key), ex=explain(o);
   S.shown.add(o.key);
   b.innerHTML=head+`<div class="ocard">
+      ${ex.vibe?`<span class="vibetag">${ex.vibe.e} ${ex.vibe.ar}</span>`:''}
       <div class="lookhead"><b>${ex.title}</b><span class="score">تناسق ${pct(o.s)}%</span></div>
       <p class="lookdesc">${ex.desc}</p>
       ${boardHTML(autoLayout(ps))}
       <div class="pieces" id="pcs">${ps.map(p=>`<div class="pc"><div class="im"><img src="${p.img}" alt=""></div>
         <button class="lk ${S.locks[p.cat]===p.id?'on':''}" data-cat="${p.cat}" data-id="${p.id}" aria-label="ثبّت">${S.locks[p.cat]===p.id?IC.lock:IC.unlock}</button></div>`).join('')}</div>
-      <div class="meta"><div class="pal">${ps.map(p=>`<i style="background:${p.color}"></i>`).join('')}</div></div>
+      <div class="meta"><div class="pal">${ps.map(p=>`<i style="background:${p.color}"></i>`).join('')}</div>
+        <div class="fabs">${ex.fabrics.map(f=>`<span>${esc(f)}</span>`).join('')}</div></div>
       <ul class="why">${ex.points.map(t=>`<li>${esc(t)}</li>`).join('')}</ul>
+      ${ex.tips.length||ex.missing.length?`<div class="note"><b>💬 لمسة الستايلست</b>
+        ${ex.tips.map(t=>`<p>${esc(t)}</p>`).join('')}
+        ${ex.missing.length?`<p class="miss">تكمّلها بـ: ${ex.missing.map(esc).join(' · ')}</p>`:''}</div>`:''}
       <div class="pager">${S.results.map((_,i)=>`<i class="${i===S.idx?'on':''}"></i>`).join('')}</div>
       <div class="row" style="margin-bottom:10px">
         <button class="btn sq" id="oFav" style="color:${saved?'var(--hi)':'inherit'}" aria-label="حفظ">${saved?IC.heartF:IC.heart}</button>
@@ -1196,11 +1324,30 @@ function renderStylist(){
     if(S.planDate){ S.planDate=null; S.wxManual=false; toast('انضاف للتقويم 📅'); S.view='plan'; go('plan'); }
     else { toast('تمام ✓ سجلته بالتقويم'); renderStylist(); } };
 }
+function pieceWaysSheet(it){
+  busy(true,'أفكّر في ٤ طرق لها…');
+  setTimeout(()=>{
+    const used=new Set(), ways=[];
+    for(const v of ['casual','elegant','street','chic']){ const o=generate({locks:{[it.cat]:it.id},vibe:v,look:'all',n:1,occ:null,ignoreRecent:true,avoid:used})[0];
+      if(o&&!used.has(o.key)){ used.add(o.key); ways.push({v,o}); } }
+    busy(false);
+    if(!ways.length){ toast('أحتاج قطع أكثر عشان أنسّق عليها'); return; }
+    openSheet(`<div class="sheethead"><h2>✨ قطعة وحدة، ${ways.length} ستايلات</h2></div>
+      <p class="hint" style="margin-top:-8px">${esc(itemName(it))} — نفس القطعة بإحساس مختلف كل مرة.</p>
+      <div class="ways" id="ways">${ways.map((w,i)=>{ const ex=explain(w.o); return `<button class="way" data-i="${i}">
+        <span class="vibetag">${VIBE[w.v].e} ${VIBE[w.v].ar}</span>${boardHTML(autoLayout(sortPieces(w.o.pieces)))}
+        <b>${ex.title}</b><small>${esc(ex.points[0]||ex.tips[0]||VIBE[w.v].d)}</small></button>`; }).join('')}</div>`);
+    $('ways').onclick=e=>{ const b=e.target.closest('[data-i]'); if(!b) return; const w=ways[+b.dataset.i];
+      closeSheet(); S.vibe=w.v; S.look='all'; S.locks={[it.cat]:it.id}; S.planDate=null;
+      S.results=[w.o,...generate({vibe:w.v,look:'all'}).filter(x=>x.key!==w.o.key)].slice(0,6); S.idx=0; S.oTab='style'; go('outfits'); };
+  },40);
+}
 function bindStyleHead(){
   $('occPick').onclick=e=>{ const b=e.target.closest('[data-v]'); if(!b) return; S.occ=b.dataset.v; S.results=[]; renderStylist(); };
   $('wxPick').onclick=e=>{ const b=e.target.closest('[data-v]'); if(!b) return; S.wx=b.dataset.v; S.wxManual=true; S.results=[]; renderStylist(); };
   $('wxGet').onclick=()=>{ S.wxManual=false; fetchWeather(true); };
   $('lookPick').onclick=e=>{ const b=e.target.closest('[data-v]'); if(!b) return; S.look=b.dataset.v; S.results=[]; renderStylist(); };
+  $('vibePick').onclick=e=>{ const b=e.target.closest('[data-v]'); if(!b) return; S.vibe=b.dataset.v; S.results=[]; S.shown=new Set(); renderStylist(); };
   if($('pnX')) $('pnX').onclick=()=>{ S.planDate=null; S.wxManual=false; S.results=[]; renderStylist(); };
 }
 function renderSaved(){
@@ -1782,6 +1929,8 @@ function insight(catN){
 $('settingsBtn').onclick=()=>{
   openSheet(`<h2>الإعدادات</h2>
     <div class="field"><label>العملة</label><div class="wrapchips" id="sCur">${CURS.map(c=>`<button class="chip ${S.set.cur===c?'on':''}" data-v="${c}">${c}</button>`).join('')}</div></div>
+    <div class="field"><label>ألوانك المفضّلة — أعطيها أولوية في التنسيق</label>
+      <div class="swatches" id="sFav">${PALETTE.map(p=>`<button class="sw ${(S.set.favColors||[]).includes(p[0])?'on':''}" data-v="${p[0]}" style="background:${p[0]}" aria-label="${p[1]}"></button>`).join('')}</div></div>
     <div class="field"><label>الاستيراد من المتاجر</label>
       <input class="inp" id="sApi" dir="ltr" placeholder="رابط خدمة الاستيراد (مثلاً https://closia.vercel.app)" value="${esc(S.set.apiBase||window.CLOSIA_API||'')}">
       <p class="hint" style="margin-top:6px">${hasApi()?'✓ الاستيراد التلقائي مفعّل':'الاستيراد التلقائي يحتاج خدمة Closia (Vercel). بدونها تقدر تستخدم زر سفاري أو تلصق الصورة.'}</p>
@@ -1799,6 +1948,8 @@ $('settingsBtn').onclick=()=>{
   $('sCur').onclick=async e=>{ const b=e.target.closest('[data-v]'); if(!b) return; S.set.cur=b.dataset.v; await saveSet();
     $('sCur').querySelectorAll('.chip').forEach(x=>x.classList.toggle('on',x===b)); render(); };
   $('sAI').onchange=async e=>{ S.set.aiBg=e.target.checked; await saveSet(); };
+  $('sFav').onclick=async e=>{ const b=e.target.closest('[data-v]'); if(!b) return; const f=new Set(S.set.favColors||[]);
+    f.has(b.dataset.v)?f.delete(b.dataset.v):f.add(b.dataset.v); S.set.favColors=[...f]; b.classList.toggle('on'); S.results=[]; S.hero=null; await saveSet(); };
   $('sApi').onchange=async e=>{ S.set.apiBase=e.target.value.trim(); await saveSet(); toast('انحفظ ✓'); };
   $('sSafari').onclick=safariSheet; $('sLog').onclick=importLogSheet;
   $('sWx').onclick=()=>{ closeSheet(); S.wxManual=false; fetchWeather(true); };
