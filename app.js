@@ -99,7 +99,7 @@ const S = {
   view:'closet',
   closet:{cat:'all', q:'', color:null, sort:'new', laundry:false, tab:'items'}, hero:null,
   oTab:'style', occ:'casual', wx:null, wxManual:false, wxInfo:null, planDate:null,
-  results:[], idx:0, locks:{}, look:'all', shown:new Set(),
+  results:[], idx:0, locks:{}, look:'all', vibe:'all', shown:new Set(),
   pTab:'cal', cal:{y:now0.getFullYear(), m:now0.getMonth()},
 };
 
@@ -166,7 +166,7 @@ function mkCanvas(w,h){ const c=document.createElement('canvas'); c.width=w; c.h
 /* Pipeline: source photo (canvas) → optional enhancement → alpha mask (AI or classic,
    plus manual touch-ups) → composed cut-out. The source and mask are stored with the
    item so every step can be redone later. */
-function srcFromImage(im,MAX=720){
+function srcFromImage(im,MAX=1280){
   const k=Math.min(1,MAX/Math.max(im.naturalWidth||im.width,im.naturalHeight||im.height));
   const w=Math.max(8,Math.round((im.naturalWidth||im.width)*k)), h=Math.max(8,Math.round((im.naturalHeight||im.height)*k));
   const c=mkCanvas(w,h), x=c.getContext('2d'); x.fillStyle='#fff'; x.fillRect(0,0,w,h); x.drawImage(im,0,0,w,h); return c;
@@ -250,16 +250,17 @@ function alphaToURL(a,w,h){ const c=mkCanvas(w,h), x=c.getContext('2d'), id=x.cr
 async function alphaFromURL(url,w,h){ const im=await loadImg(url); const c=mkCanvas(w,h); c.getContext('2d').drawImage(im,0,0,w,h);
   const d=ctx2d(c).getImageData(0,0,w,h).data, a=new Uint8ClampedArray(w*h); for(let i=0;i<a.length;i++) a[i]=d[i*4]; return a; }
 // Build the final picture + colours from source, mask and settings.
-function compose(src,alpha,{auto=true,bright=0,useCut=true}={}){
+function compose(src,alpha,{auto=true,bright=0,useCut=true,final=false}={}){
   const w=src.width,h=src.height,N=w*h, id=enhancedData(src,{auto,bright}), d=id.data;
   if(useCut&&alpha){
     const bg=new Uint8Array(N); let x0=w,y0=h,x1=0,y1=0;
     for(let i=0;i<N;i++){ const v=alpha[i]; d[i*4+3]=v; bg[i]=v<128?1:0;
       if(v>20){ const px=i%w,py=(i/w)|0; if(px<x0)x0=px; if(px>x1)x1=px; if(py<y0)y0=py; if(py>y1)y1=py; } }
     if(x1>x0&&y1>y0){
+      if(final&&window.ClosiaCutout) ClosiaCutout.decontaminate(d,alpha,w,h);   // clean edge colours (no halo)
       const colors=detectColors(d,w,h,bg,null);
       const c=mkCanvas(w,h); c.getContext('2d').putImageData(id,0,0);
-      const bw=x1-x0+1, bh=y1-y0+1, p=Math.round(Math.max(bw,bh)*.03), kk=Math.min(1,640/Math.max(bw+2*p,bh+2*p));
+      const bw=x1-x0+1, bh=y1-y0+1, p=Math.round(Math.max(bw,bh)*.03), kk=Math.min(1,1000/Math.max(bw+2*p,bh+2*p));
       const cc=mkCanvas(Math.round((bw+2*p)*kk),Math.round((bh+2*p)*kk));
       cc.getContext('2d').drawImage(c,x0,y0,bw,bh,p*kk,p*kk,bw*kk,bh*kk);
       return {img:cc.toDataURL('image/png'),ar:cc.height/cc.width,cut:true,...colors};
@@ -481,8 +482,117 @@ function evalLooks(ps,occ){
   // one-piece
   if(full&&shoes&&(!bag||isNeu(bag)||sameColor(ci(bag),ci(shoes)))&&core.filter(p=>p!==full).every(p=>isNeu(p)||sameTone(ci(p),ci(full))))
     add('onepiece',1,bag&&sameColor(ci(bag),ci(shoes))?'الشنطة والحذاء نفس اللون — لمسة فخمة':'القطعة الكاملة هي البطل والباقي ناعم');
+  out.push(...evalCreative(ps,occ));
   return out.sort((a,b)=>b.v-a.v);
 }
+
+/* ---------- creative stylist: fabrics, vibes, creative formulas, stylist notes ---------- */
+const FABRICS = [
+  {id:'cotton',ar:'قطن',w:2,tex:'smooth'},{id:'linen',ar:'كتان',w:1,tex:'slub'},{id:'denim',ar:'جينز',w:3,tex:'rugged'},
+  {id:'knit',ar:'تريكو/صوف',w:4,tex:'knit'},{id:'leather',ar:'جلد',w:4,tex:'leather',sheen:1},{id:'silk',ar:'حرير/ساتان',w:1,tex:'silk',sheen:2},
+  {id:'sheer',ar:'شيفون/شفاف',w:1,tex:'sheer'},{id:'lace',ar:'دانتيل',w:1,tex:'lace'},{id:'fur',ar:'فرو',w:5,tex:'fur'},
+  {id:'velvet',ar:'مخمل',w:4,tex:'velvet',sheen:1},{id:'tech',ar:'رياضي',w:2,tex:'tech'},
+];
+const FAB = Object.fromEntries(FABRICS.map(f=>[f.id,f]));
+const FAB_KW = [
+  ['silk',/حرير|ساتان|ستان|silk|satin/i],['linen',/كتان|linen/i],['denim',/جينز|دنيم|denim|jean/i],
+  ['knit',/صوف|تريكو|كنزة|سويتر|كشمير|knit|wool|cashmere|cardigan|كارديغ/i],['leather',/جلد|leather|suede|شمواه/i],
+  ['sheer',/شيفون|شفاف|تول|اورجانزا|chiffon|sheer|mesh|organza|tulle/i],['lace',/دانتيل|lace/i],['fur',/فرو|fur|shearling|faux fur/i],
+  ['velvet',/مخمل|velvet/i],['tech',/رياضي|جيم|نايلون|tech|nylon|sport|track/i],
+];
+function guessFabric(it){
+  const t=(it.name||'')+' '+(it.tags||[]).join(' ');
+  for(const [id,re] of FAB_KW) if(re.test(t)) return id;
+  if(patOf(it)==='denim') return 'denim'; if(styleOf(it)==='sport') return 'tech';
+  return 'cotton';
+}
+const fabOf = it => FAB[it.fabric||guessFabric(it)]||FAB.cotton;
+
+const VIBES = [
+  {id:'casual', e:'☕', ar:'كاجوال',   d:'مريح ومرتب ليومك العادي.',          target:2.4, like:{casual:1,street:.4,smart:.4,sport:.1}},
+  {id:'elegant',e:'🥂', ar:'أنيق',     d:'قصّات نظيفة وخامات راقية.',          target:4.2, like:{classic:1,evening:1,smart:.6,trad:.7}, fab:{silk:.8,velvet:.6,lace:.5,knit:.4,leather:.3}},
+  {id:'street', e:'🧢', ar:'ستريت وير', d:'قصّات واسعة وسنيكرز وثقة.',         target:2,   like:{street:1,sport:.6,casual:.5}},
+  {id:'chic',   e:'🖤', ar:'شيك',      d:'المرتّب مع لمسة عصرية غير متوقعة.',  target:3.3, like:{smart:1,classic:.7,evening:.4,casual:.3}},
+  {id:'bold',   e:'⚡', ar:'جريء',     d:'تركيبات ما خطرت على بالك — بس مدروسة.', target:null, like:null},
+];
+const VIBE = Object.fromEntries(VIBES.map(v=>[v.id,v]));
+const CREATIVE = new Set(['highlow','texture','patternmix','colorblock','headtotoe','bold','sandwich','denim']);
+
+// Extra (creative) formulas evaluated next to the classic trend looks.
+function evalCreative(ps,occ){
+  const g=c=>ps.find(p=>p.cat===c), shoes=g('shoes');
+  const main=ps.filter(p=>['top','bottom','full','outer'].includes(p.cat)), core=shoes?[...main,shoes]:main;
+  const ci=p=>colorInfo(p.color), out=[], add=(id,v,why)=>out.push({id,v,why});
+  const fs=core.map(formOf), hi=core.find(p=>formOf(p)>=4), lo=core.find(p=>formOf(p)<=2);
+  if(hi&&lo&&main.length>=2) add('highlow',1,`${itemName(hi).split(' · ')[0]} الرسمي مع ${itemName(lo).split(' · ')[0]} المريح — توازن «هاي-لو» عصري`);
+  const tex=[...new Set(main.map(p=>fabOf(p).tex))];
+  if(tex.length>=2&&main.length>=2&&(main.every(isNeu)||main.every(p=>sameTone(ci(p),ci(main[0])))))
+    add('texture',1,`لعب بالخامات: ${[...new Set(main.map(p=>fabOf(p).ar))].slice(0,3).join(' + ')} بنفس الدرجات — عمق بدون ضجة`);
+  const pats=main.filter(p=>!['solid','denim'].includes(patOf(p)));
+  if(pats.length===2&&patOf(pats[0])!==patOf(pats[1])){
+    const share=sameColor(ci(pats[0]),ci(pats[1]))||(pats[0].color2&&sameColor(colorInfo(pats[0].color2),ci(pats[1])))||(pats[1].color2&&sameColor(colorInfo(pats[1].color2),ci(pats[0])));
+    if(share) add('patternmix',1,'نقشتين مختلفتين يجمعهم لون واحد — مزج نقشات بطريقة المحترفين'); }
+  const louds=main.filter(p=>!isNeu(p)&&patOf(p)==='solid'), names=[...new Set(louds.map(p=>ci(p).name))];
+  if(names.length>=2&&names.length<=3&&louds.length>=2){ const h=harmony(ci(louds[0]),ci(louds[1]));
+    if(h.k==='comp'||h.k==='triad'||h.k==='analog') add('colorblock',.9,`بلوك ألوان: ${names.join(' + ')} بقطع سادة كبيرة`); }
+  if(core.length>=3&&core.every(p=>sameTone(ci(p),ci(core[0])))&&!core.every(p=>GREY_N.has(ci(p).name)))
+    add('headtotoe',1,`مونوكروم كامل من الراس للحذاء بدرجات ${ci(core[0]).name}`);
+  return out;
+}
+LOOKS.push(
+  {id:'highlow',   e:'🎭', ar:'هاي-لو',         d:'قطعة رسمية مع قطعة رياضية أو مريحة — توازن الستايلستات العصري.'},
+  {id:'texture',   e:'🧶', ar:'لعب بالخامات',   d:'خامات مختلفة بنفس الألوان تعطي عمق وفخامة.'},
+  {id:'patternmix',e:'🌀', ar:'مزج نقشات',      d:'نقشتين يجمعهم لون — جريء ومدروس.'},
+  {id:'colorblock',e:'🟧', ar:'بلوك ألوان',     d:'ألوان قوية بقطع سادة كبيرة متناسقة على عجلة الألوان.'},
+  {id:'headtotoe', e:'🎨', ar:'مونوكروم كامل',  d:'لون واحد من الراس للحذاء — أقوى إطلالة بأقل مجهود.'},
+);
+LOOKS.forEach(l=>LOOK[l.id]=l);
+
+function vibeScore(ps,vibe){
+  const v=VIBE[vibe]; if(!v) return 0;
+  const main=ps.filter(p=>['top','bottom','full','outer'].includes(p.cat)), shoes=ps.find(p=>p.cat==='shoes'), core=shoes?[...main,shoes]:main;
+  if(!core.length) return 0;
+  let s=0;
+  if(v.like){ s+=core.reduce((a,p)=>a+(v.like[styleOf(p)]??-.8),0)/core.length*2.6;
+    const f=core.reduce((a,p)=>a+formOf(p),0)/core.length; s-=Math.abs(f-v.target)*1.1; }
+  if(v.fab) s+=Math.min(1.2,main.reduce((a,p)=>a+(v.fab[fabOf(p).id]||0),0));
+  if(vibe==='street'){ if(main.some(p=>fitOf(p)==='loose')) s+=1; if(shoes&&['casual','street','sport'].includes(styleOf(shoes))) s+=.8;
+    s-=main.filter(p=>['classic','evening'].includes(styleOf(p))).length*.9; }
+  if(vibe==='chic'){ if(core.filter(isNeu).length/core.length>=.6) s+=.6; if(ps.some(p=>p.cat==='acc'||p.cat==='bag')) s+=.4;
+    if(new Set(main.map(p=>fabOf(p).tex)).size>=2) s+=.5; }
+  if(vibe==='elegant'&&shoes&&['casual','street','sport'].includes(styleOf(shoes))) s-=.8;
+  if(vibe==='bold'){ const t=taste(); let nov=0;
+    for(let i=0;i<ps.length;i++) for(let j=i+1;j<ps.length;j++) if(!t.pairs[pairKey(ps[i].id,ps[j].id)]) nov++;
+    s+=Math.min(1.5,nov*.3); s+=ps.filter(p=>(p.wears||0)<2).length*.2; }
+  return s;
+}
+
+// Concrete styling directions, like a stylist's notes.
+function stylistTips(ps,o){
+  const g=c=>ps.find(p=>p.cat===c), top=g('top'), bot=g('bottom'), full=g('full'), outer=g('outer'), shoes=g('shoes'), tips=[];
+  const nm=p=>p?(p.name||'').toLowerCase():'';
+  if(top&&bot&&fitOf(top)!=='slim'&&fitOf(bot)!=='loose') tips.push('دخّل طرف القطعة الفوقية من قدّام بس (French tuck) عشان يبان الخصر.');
+  if(top&&bot&&fitOf(top)==='loose'&&fitOf(bot)==='loose') tips.push('القطعتين واسعة — خلّ الحذاء هو اللي يعطي الشكل، وكمّل بإكسسوار واحد بارز.');
+  if(outer&&styleOf(outer)==='classic') tips.push('البس الجاكيت على الكتوف أو اسحب أكمامه لنص الذراع — لمسة شيك فورية.');
+  if(full&&outer) tips.push('حزام رفيع على الخصر فوق الجاكيت يرسم القوام.');
+  if(bot&&fitOf(bot)==='loose'&&shoes) tips.push('خلّ البنطلون يلمس الحذاء من قدّام — يطوّلك.');
+  if(/قميص|shirt/.test(nm(top))&&!outer) tips.push('افتح أول زرين واطوِ الأكمام مرتين — مرتب ومسترخي بنفس الوقت.');
+  if(o&&(o.look==='tonal'||o.look==='headtotoe')) tips.push('مع التدرّج اللوني، إكسسوار معدني واحد يكفي ويخطف العين.');
+  if(o&&o.look==='highlow') tips.push('خلّ القطعة الرسمية مكوية ونظيفة — التباين هو سر هاللوك.');
+  if(ps.some(p=>!['solid','denim'].includes(patOf(p)))) tips.push('النقشة هي البطلة — خلّ المجوهرات بسيطة.');
+  return tips.slice(0,2);
+}
+// What would finish the look if the closet does not have it.
+function missingSuggestions(ps,occ){
+  const has=c=>ps.some(p=>p.cat===c), out=[], ci=p=>colorInfo(p.color);
+  const warm=ps.filter(p=>WARM_N.has(ci(p).name)||EARTH.has(ci(p).name)).length>=ps.length/2;
+  const shoes=ps.find(p=>p.cat==='shoes');
+  if(!has('shoes')) out.push(`حذاء ${['work','event','out'].includes(occ)?'لوفر أو كعب':'سنيكرز'} ${warm?'بني أو بيج':'أبيض أو أسود'}`);
+  if(!has('bag')&&['out','event','work'].includes(occ)) out.push(`شنطة صغيرة ${shoes?'بلون الحذاء ('+ci(shoes).name+')':'محايدة'}`);
+  if(!has('acc')) out.push(warm?'إكسسوار ذهبي ناعم (حلق أو سلسال)':'ساعة أو إكسسوار فضي');
+  return out.slice(0,2);
+}
+const favColorBonus = ps => { const f=S.set.favColors||[]; if(!f.length) return 0; return Math.min(1.1,ps.filter(p=>f.includes(colorInfo(p.color).family)).length*.35); };
 
 function taste(){ if(!S.set.taste) S.set.taste={looks:{},pairs:{}}; return S.set.taste; }
 const pairKey=(a,b)=>a<b?a+'|'+b:b+'|'+a;
@@ -493,7 +603,7 @@ async function learn(pieces,look,w=1){
   await saveSet();
 }
 
-function scoreOutfit(ps,{occ,wx,bonus,ignoreRecent}){
+function scoreOutfit(ps,{occ,wx,bonus,ignoreRecent,vibe}){
   const g=c=>ps.find(p=>p.cat===c), top=g('top'), bot=g('bottom'), shoes=g('shoes');
   const main=ps.filter(p=>['top','bottom','full','outer'].includes(p.cat)), core=shoes?[...main,shoes]:main;
   const ci=p=>colorInfo(p.color); let s=0; const why=[];
@@ -506,7 +616,8 @@ function scoreOutfit(ps,{occ,wx,bonus,ignoreRecent}){
     else if(Math.abs(a.l-b.l)>.3) why.push('تباين حلو بين فوق وتحت'); }
   // patterns: one statement at a time
   const pats=main.filter(p=>!['solid','denim'].includes(patOf(p)));
-  if(pats.length>1) s-=3; else if(pats.length===1&&main.length>1) why.push(`النقشة وحدة (${PATTERNS.find(x=>x.id===patOf(pats[0])).ar}) والباقي سادة`);
+  const mixOk=pats.length===2&&evalCreative(ps,occ).some(l=>l.id==='patternmix');
+  if(pats.length>1&&!mixOk) s-=3; else if(pats.length===1&&main.length>1) why.push(`النقشة وحدة (${PATTERNS.find(x=>x.id===patOf(pats[0])).ar}) والباقي سادة`);
   // formality fits the occasion and pieces agree with each other
   if(core.length){
     const fs=core.map(formOf), avg=fs.reduce((a,b)=>a+b,0)/fs.length;
@@ -529,10 +640,18 @@ function scoreOutfit(ps,{occ,wx,bonus,ignoreRecent}){
     if(bonus&&bonus.has(p.id)) s+=1.4;
   }
   if(wx==='mild'&&ps.some(p=>p.cat==='outer')) s-=.5;
+  // fabrics: weather comfort and texture contrast
+  for(const p of main){ const f=fabOf(p);
+    if(wx==='hot'&&f.w>=4&&p.cat!=='outer') s-=1; if(wx==='cold'&&f.w<=1&&!ps.some(q=>q.cat==='outer')) s-=.6; }
+  if(wx==='hot'&&main.length&&main.every(p=>fabOf(p).w<=2)) why.push('خامات خفيفة تناسب الحر');
+  { const sh=main.filter(p=>fabOf(p).sheen>=2), mt=main.filter(p=>['rugged','knit'].includes(fabOf(p).tex));
+    if(sh.length&&mt.length){ s+=.4; why.push(`${fabOf(sh[0]).ar} مع ${fabOf(mt[0]).ar} — تباين خامات راقي`); } }
+  s+=favColorBonus(ps);
+  if(vibe&&vibe!=='all') s+=vibeScore(ps,vibe);
   for(let i=0;i<ps.length;i++) for(let j=i+1;j<ps.length;j++){ const n=t.pairs[pairKey(ps[i].id,ps[j].id)]; if(n) s+=.25*Math.min(3,n); }
   // trend looks
   const looks=evalLooks(ps,occ);
-  if(looks[0]) s+=3*looks[0].v+.12*Math.log1p(t.looks[looks[0].id]||0)*3;
+  if(looks[0]) s+=3*looks[0].v+.12*Math.log1p(t.looks[looks[0].id]||0)*3+(vibe==='bold'&&CREATIVE.has(looks[0].id)?1.5:0);
   if(looks[1]) s+=.6*looks[1].v;
   return {s,looks,why};
 }
@@ -545,8 +664,8 @@ function bestAddOn(ps,list,opt){
 }
 
 function generate(opt={}){
-  const occ=opt.occ===undefined?S.occ:opt.occ, wx=opt.wx??S.wx, lockIds=opt.locks??S.locks, n=opt.n??6, want=opt.look??S.look;
-  const sopt={occ,wx,bonus:opt.bonus,ignoreRecent:opt.ignoreRecent};
+  const occ=opt.occ===undefined?S.occ:opt.occ, wx=opt.wx??S.wx, lockIds=opt.locks??S.locks, n=opt.n??6, want=opt.look??S.look, vibe=opt.vibe??S.vibe;
+  const sopt={occ,wx,bonus:opt.bonus,ignoreRecent:opt.ignoreRecent,vibe};
   const P={}; CATS.forEach(c=>P[c.id]=S.items.filter(i=>i.cat===c.id&&fits(i,occ,wx)));
   const L={}; for(const [c,id] of Object.entries(lockIds)){ const it=byId(id); if(it) L[c]=it; }
   const cores=[];
@@ -575,10 +694,11 @@ function generate(opt={}){
     const key=full.map(p=>p.id).sort().join('|'); if(res.has(key)) continue;
     const r=scoreOutfit(full,sopt);
     if(!opt.ignoreRecent&&recent.has(key)) r.s-=3;
-    if(opt.avoid&&opt.avoid.has(key)) r.s-=4;
+    if(opt.avoid&&opt.avoid.has(key)) r.s-=8;
     if(shown.has(key)) r.s-=1.2;
     r.s+=Math.random()*.35;
-    res.set(key,{pieces:full,key,...r,look:r.looks[0]?r.looks[0].id:null});
+    const cre=vibe==='bold'?r.looks.find(l=>CREATIVE.has(l.id)&&l.v>=.75):null;
+    res.set(key,{pieces:full,key,...r,vibe,look:cre?cre.id:r.looks[0]?r.looks[0].id:null});
   }
   let list=[...res.values()].sort((a,b)=>b.s-a.s);
   if(want&&want!=='all'){ const f=list.filter(o=>o.looks.some(l=>l.id===want&&l.v>=.5)); f.forEach(o=>o.look=want); list=f; }
@@ -606,7 +726,8 @@ function explain(o){
   parts.push(...o.why.slice(0,1));
   if(o.pieces.some(p=>p.cat==='outer')&&S.wx==='cold') parts.push('أضفت طبقة خارجية عشان البرد');
   const fresh=o.pieces.filter(p=>!p.wears).length; if(fresh&&S.items.some(i=>i.wears)) parts.push(fresh===1?'وفيه قطعة ما لبستها قبل — فرصتها':`وفيه ${fresh} قطع ما لبستها قبل`);
-  return {title:l?`${l.e} ${l.ar}`:'✨ تنسيق متوازن', desc:l?l.d:'ألوان متناسقة وقطع تمشي مع بعض.', points:parts.slice(0,3)};
+  return {title:l?`${l.e} ${l.ar}`:'✨ تنسيق متوازن', desc:l?l.d:'ألوان متناسقة وقطع تمشي مع بعض.', points:parts.slice(0,3),
+    vibe:VIBE[o.vibe]||null, tips:stylistTips(o.pieces,o), missing:missingSuggestions(o.pieces,S.occ), fabrics:[...new Set(o.pieces.filter(p=>['top','bottom','full','outer'].includes(p.cat)).map(p=>fabOf(p).ar))]};
 }
 const starsOf = s => { const n=s>=9.2?5:s>=7.6?4:s>=5.8?3:2; return '★'.repeat(n)+'☆'.repeat(5-n); };
 
@@ -784,28 +905,39 @@ async function ensureWork(it){
   const s=mkCanvas(w,h), sx=s.getContext('2d'); sx.fillStyle='#fff'; sx.fillRect(0,0,w,h); sx.drawImage(c,0,0);
   Object.assign(it,{_src:s,_alpha:a,enh:false,bright:0,useCut:!!a});
 }
-function recompose(it){
-  const r=compose(it._src,it._alpha,{auto:it.enh!==false,bright:it.bright||0,useCut:it.useCut!==false});
+function recompose(it,final=false){
+  const r=compose(it._src,it._alpha,{auto:it.enh!==false,bright:it.bright||0,useCut:it.useCut!==false,final});
   it.img=r.img; it.ar=r.ar; it.cut=r.cut; if(it._colorAuto){ it.color=r.color; it.color2=r.color2; }
 }
+// Garment isolation engine (cutout.js): analyse once, then cut any category from the same photo.
+async function cutoutAnalyse(src){
+  if(!window.ClosiaCutout) throw new Error('engine missing');
+  if(!ClosiaCutout.ready()) busy(true,'أنزّل محرك عزل الملابس — مرة وحدة بس…');
+  return ClosiaCutout.analyse(src,p=>busy(true,`أنزّل محرك عزل الملابس — مرة وحدة بس… ${Math.round(p*100)}%`));
+}
+function cutoutAlpha(an,src,cat){ return ClosiaCutout.alpha(an,ctx2d(src).getImageData(0,0,src.width,src.height).data,cat||'top'); }
 // Turn picture blobs into draft items (AI cut-out → editor). meta pre-fills fields.
 async function intake(sources,opts={}){
   const drafts=[]; let aiOk=S.set.aiBg!==false, aiFailed=false;
   for(let n=0;n<sources.length;n++){
     const {blob,meta={}}=sources[n], lbl=sources.length>1?` (${n+1} / ${sources.length})`:'';
-    busy(true,(aiOk?'✨ أشيل الخلفية بالذكاء الاصطناعي…':'أشيل الخلفية وأعرف اللون…')+lbl);
+    busy(true,(aiOk?'✨ أعزل القطعة بالذكاء الاصطناعي…':'أشيل الخلفية وأعرف اللون…')+lbl);
     await new Promise(r=>setTimeout(r,30));
     const u=URL.createObjectURL(blob);
     try{
-      const im=await loadImg(u), src=srcFromImage(im); let alpha=null, kind=null;
-      if(aiOk){ try{ alpha=await aiAlpha(src,p=>busy(true,`أنزّل محرك الذكاء الاصطناعي — مرة وحدة بس… ${Math.round(p*100)}%`)); kind='ai'; }
-        catch(err){ console.warn('AI background removal failed',err); aiOk=false; aiFailed=true; } }
+      const im=await loadImg(u), src=srcFromImage(im); let alpha=null, kind=null, an=null, cat=meta.cat||null, matte=null;
+      if(aiOk){
+        try{ an=await cutoutAnalyse(src); cat=cat||ClosiaCutout.guessCategory(an); alpha=cutoutAlpha(an,src,cat); kind='ai2';
+          matte=Uint8ClampedArray.from(an.alpha,v=>v*255); }
+        catch(err){ console.warn('garment engine failed, trying matte only',err); an=null;
+          try{ alpha=await aiAlpha(src,p=>busy(true,`أنزّل محرك الذكاء الاصطناعي — مرة وحدة بس… ${Math.round(p*100)}%`)); kind='ai'; matte=alpha; }
+          catch(e2){ console.warn('AI background removal failed',e2); aiOk=false; aiFailed=true; } } }
       if(!alpha){ busy(true,'أشيل الخلفية وأعرف اللون…'+lbl); await new Promise(r=>setTimeout(r,20)); alpha=classicAlpha(src); kind=alpha?'classic':null; }
-      const it={id:uid(),_src:src,_alpha:alpha,_colorAuto:true,maskKind:kind,enh:!meta.store,bright:0,useCut:!!alpha,
+      const it={id:uid(),_src:src,_alpha:alpha,_an:an,_matte:matte,_colorAuto:true,maskKind:kind,enh:!meta.store,bright:0,useCut:!!alpha,
         name:meta.name||'',brand:meta.brand||'',price:meta.price||'',size:'',tags:[],seasons:['all'],occs:[],fav:false,laundry:false,wears:0,lastWorn:0,added:Date.now()+n,
-        ...(meta.url?{url:meta.url}:{}),...(opts.wish?{wish:true}:{})};
-      recompose(it);
-      it.cat=meta.cat||(S.closet.cat!=='all'&&CAT[S.closet.cat]?S.closet.cat:(it.ar<.75?'shoes':it.ar>1.45?'bottom':'top'));
+        ...(meta.url?{url:meta.url}:{}),...(meta.sourceImage?{sourceImage:meta.sourceImage}:{}),...(opts.wish?{wish:true}:{})};
+      recompose(it,true);
+      it.cat=cat||(S.closet.cat!=='all'&&CAT[S.closet.cat]?S.closet.cat:(it.ar<.75?'shoes':it.ar>1.45?'bottom':'top'));
       drafts.push(it);
     }catch(err){ console.warn(err); }
     URL.revokeObjectURL(u);
@@ -814,7 +946,8 @@ async function intake(sources,opts={}){
   if(aiFailed) toast('الذكاء الاصطناعي يحتاج نت أول مرة — استخدمت الطريقة السريعة');
   if(drafts.length) editItem(drafts,0,true); else toast('ما قدرت أقرأ الصورة');
 }
-$('fileIn').addEventListener('change',e=>{ const f=[...e.target.files]; if(f.length) intake(f.map(blob=>({blob}))); });
+$('fileIn').addEventListener('change',e=>{ const f=[...e.target.files], meta=S._pendingMeta||{}, wish=!!S._pendingWish; S._pendingMeta=null; S._pendingWish=false;
+  if(f.length) intake(f.map(blob=>({blob,meta})),{wish}); });
 
 async function pasteImage(fromLink){
   const meta=fromLink===true?(S._linkMeta||{}):{}, wish=fromLink===true&&S._linkWish;
@@ -824,29 +957,6 @@ async function pasteImage(fromLink){
     for(const it of items) if(it.types.includes('text/plain')){ const tx=(await (await it.getType('text/plain')).text()).trim(); if(splitShare(tx).url) return linkSheet(tx,wish); }
     toast('ما فيه صورة منسوخة — اضغط مطوّل على أي صورة واختر «نسخ»');
   }catch(e){ toast('اضغط «لصق» لما يطلب منك، أو انسخ صورة أول'); }
-}
-function linkSheet(pre='',wish=false){
-  S._linkWish=wish; S._linkMeta=null;
-  openSheet(`<h2>${wish?'🤍 أضف للأمنيات':'من رابط منتج'}</h2>
-    <p class="hint" style="margin-top:-6px">افتح المنتج في أي متجر (زارا، نمشي، شي إن، H&M…) ← زر المشاركة ← <b>نسخ الرابط</b>، والصقه هنا.</p>
-    <div class="row" style="margin:12px 0"><textarea class="inp" id="lUrl" rows="2" dir="ltr" placeholder="الصق الرابط أو نص المشاركة كامل" style="flex:1;resize:none">${esc(pre)}</textarea>
-      <button class="btn" id="lPaste" style="flex:none">لصق</button></div>
-    <button class="btn primary block" id="lGo">جيب الصور</button>
-    <div id="lRes"></div>`);
-  $('lPaste').onclick=async()=>{ try{ $('lUrl').value=(await navigator.clipboard.readText()).trim(); }catch(e){ toast('الصق بالضغط المطوّل على الخانة'); } };
-  $('lGo').onclick=()=>loadLink($('lUrl').value.trim());
-  if(pre) loadLink(pre);
-}
-const IMG_PROXY=(u,w)=>`https://wsrv.nl/?url=${encodeURIComponent(u)}&w=${w}&h=${w}&fit=inside&output=jpg&q=90`;
-const PAGE_PROXIES=[u=>u, u=>'https://api.allorigins.win/raw?url='+encodeURIComponent(u), u=>'https://corsproxy.io/?url='+encodeURIComponent(u)];
-async function fetchTimeout(u,ms=15000){ const c=new AbortController(), t=setTimeout(()=>c.abort(),ms); try{ return await fetch(u,{signal:c.signal}); } finally{ clearTimeout(t); } }
-async function fetchPage(u){
-  for(const p of PAGE_PROXIES){ try{ const r=await fetchTimeout(p(u)); if(r.ok){ const t=await r.text(); if(t.length>120) return t; } }catch(e){} }
-  throw new Error('page');
-}
-async function fetchImageBlob(u){
-  for(const src of [IMG_PROXY(u,1400),u]){ try{ const r=await fetchTimeout(src,20000); if(r.ok){ const b=await r.blob(); if(b.type.startsWith('image/')&&b.size>800) return b; } }catch(e){} }
-  throw new Error('image');
 }
 function catFromText(t){
   t=(t||'').toLowerCase();
@@ -858,44 +968,6 @@ function catFromText(t){
     ['acc',/watch|sunglass|belt|\bhat\b|\bcap\b|scarf|earring|necklace|bracelet|\bring\b|beanie|ساعة|نظار|حزام|قبع|كاب|وشاح|حلق|سلسال|اسوار|أسوار|خاتم|شماغ|طرح/],
     ['top',/shirt|tee\b|t-shirt|\btop\b|blouse|sweater|hoodie|sweatshirt|polo|knit|tank|cami|jumper|قميص|تيشيرت|تي شيرت|بلوز|هودي|سويتر|كنزة|بولو|توب/]];
   for(const [c,re] of R) if(re.test(t)) return c; return null;
-}
-function parseProduct(html,base){
-  const doc=new DOMParser().parseFromString(html,'text/html');
-  const abs=x=>{ try{ return new URL(x,base).href.replace(/^http:/,'https:'); }catch(e){ return null; } };
-  const imgs=[]; const push=x=>{ if(!x) return; if(Array.isArray(x)) return x.forEach(push);
-    if(typeof x==='object') return push(x.url||x.contentUrl||x['@id']);
-    const a=abs(String(x).trim()); if(a&&/^https:/.test(a)&&!/\.svg(\?|$)|sprite|logo|icon|placeholder|payment|flag/i.test(a)&&!imgs.includes(a)) imgs.push(a); };
-  let name='',brand='',price='',cur='';
-  doc.querySelectorAll('script[type="application/ld+json"]').forEach(s=>{ try{
-    const walk=o=>{ if(!o||typeof o!=='object') return; if(Array.isArray(o)) return o.forEach(walk); if(o['@graph']) walk(o['@graph']);
-      const t=[].concat(o['@type']||[]).join(' ');
-      if(/Product/i.test(t)){ name=name||o.name; brand=brand||(o.brand&&(o.brand.name||(typeof o.brand==='string'?o.brand:''))); push(o.image);
-        const of=[].concat(o.offers||[])[0]; if(of){ price=price||of.price||of.lowPrice||(of.priceSpecification&&of.priceSpecification.price)||''; cur=cur||of.priceCurrency||''; } }
-      if(o.hasVariant) walk(o.hasVariant); };
-    walk(JSON.parse(s.textContent)); }catch(e){} });
-  const meta=n=>{ const m=doc.querySelector(`meta[property="${n}"],meta[name="${n}"]`); return m&&m.getAttribute('content'); };
-  doc.querySelectorAll('meta[property="og:image"],meta[property="og:image:secure_url"],meta[name="twitter:image"]').forEach(m=>push(m.getAttribute('content')));
-  if(imgs.length<4) doc.querySelectorAll('img').forEach(im=>{
-    let best=im.getAttribute('data-zoom-image')||im.getAttribute('data-src')||im.getAttribute('src');
-    const ss=im.getAttribute('srcset')||im.getAttribute('data-srcset');
-    if(ss){ const parts=ss.split(',').map(x=>x.trim().split(/\s+/)).filter(p=>p[0]); parts.sort((a,b)=>(parseInt(b[1])||0)-(parseInt(a[1])||0)); if(parts[0]) best=parts[0][0]; }
-    if(best&&!/^data:/.test(best)&&/product|media|catalog|cdn|images|files|static/i.test(best)) push(best); });
-  name=(name||meta('og:title')||doc.title||'').replace(/\s*[|–-]\s*[^|–-]{2,40}$/,'').trim();
-  price=String(price||meta('product:price:amount')||meta('og:price:amount')||'').replace(/[^\d.]/g,'');
-  cur=cur||meta('product:price:currency')||meta('og:price:currency')||'';
-  brand=String(brand||meta('product:brand')||meta('og:site_name')||'').trim();
-  // pages that build the gallery with JavaScript (e.g. SHEIN): scan the raw source for image URLs
-  if(imgs.length<3){
-    const raw=html.replace(/\\u002F/gi,'/').replace(/\\\//g,'/');
-    const re=/(?:https?:)?\/\/[a-z0-9.-]+\.[a-z]{2,}\/[^"'\s()<>\\]+?\.(?:jpe?g|png|webp)(?:\?[^"'\s<>\\]*)?/gi, found=new Map(); let m, n=0;
-    while((m=re.exec(raw))&&n++<3000){ let u=m[0]; if(u.startsWith('//')) u='https:'+u;
-      if(/sprite|logo|icon|banner|flag|payment|avatar|badge|emoji|\/\d{2}x\d{2}[._]/i.test(u)) continue;
-      const key=u.replace(/_thumbnail_\d+x\d*(?=\.)/,'').replace(/_\d{2,4}x\d{2,4}(?=\.)/,'').replace(/\?.*$/,'');
-      found.set(key,(found.get(key)||0)+1); }
-    const prod=u=>/goods|product|images3_p|catalog|media|\/p\/|item/i.test(u)?1:0;
-    [...found.entries()].sort((a,b)=>(prod(b[0])-prod(a[0]))||(b[1]-a[1])).slice(0,16).forEach(e=>push(e[0]));
-  }
-  return {name:name.slice(0,60),brand:brand.slice(0,40),price,cur,imgs:imgs.slice(0,16)};
 }
 // Shared text from store apps looks like "Product title… check it out! https://…" — split it.
 function splitShare(text){
@@ -910,39 +982,154 @@ function brandFromUrl(u){
     const known={shein:'SHEIN',zara:'ZARA',hm:'H&M','h&m':'H&M',namshi:'Namshi',noon:'noon',mango:'MANGO',bershka:'Bershka',pullandbear:'Pull&Bear',stradivarius:'Stradivarius',uniqlo:'UNIQLO',asos:'ASOS',farfetch:'FARFETCH',ounass:'Ounass',levelshoes:'Level Shoes',amazon:'Amazon',temu:'Temu',nike:'Nike',adidas:'adidas',massimodutti:'Massimo Dutti',cos:'COS',max:'Max','6thstreet':'6thStreet',aldoshoes:'ALDO',charleskeith:'CHARLES & KEITH'};
     for(const k in known) if(h.includes(k)) return known[k]; return ''; }catch(e){ return ''; }
 }
+/* ---- product import: Closia API (server-side, allow-listed) + "Add to Closia" in Safari ----
+   No third-party CORS proxies: pages are read by our own backend (/api/import-product), and for
+   stores that block servers the user can run the Safari button inside their own browser. */
+const API_BASE = () => String(S.set.apiBase || window.CLOSIA_API || '').trim().replace(/\/+$/,'');
+const sameOriginApi = () => /\.vercel\.app$/.test(location.hostname) || location.port==='8787';
+const hasApi = () => !!API_BASE() || sameOriginApi();
+const apiUrl = p => (API_BASE()||'') + p;
+const IMPORT_MSG = {
+  BOT_PROTECTION:'المتجر يحمي صفحاته من القراءة الآلية، فما أقدر أقرأها من الخادم.',
+  TIMEOUT:'المتجر ما رد — غالباً يحجب القراءة الآلية.',
+  NO_IMAGE:'قرأت الصفحة بس ما لقيت صورة المنتج فيها.',
+  NOT_FOUND:'صفحة المنتج غير موجودة — ممكن انحذف المنتج.',
+  DOMAIN_NOT_ALLOWED:'هذا الموقع مو من المتاجر المدعومة للاستيراد التلقائي.',
+  INVALID_URL:'الرابط غير صحيح — انسخ رابط المنتج نفسه.',
+  API_OFF:'خدمة الاستيراد التلقائي مو مفعّلة في هالنسخة.',
+  API_UNREACHABLE:'ما قدرت أوصل لخدمة الاستيراد — تأكد من النت.',
+  RATE_LIMITED:'طلبات كثيرة — جرّب بعد دقيقة.',
+};
+async function logImport(e){
+  const log=(await DB.get('kv','importLog'))||[];
+  log.unshift({t:Date.now(),...e}); await DB.put('kv',log.slice(0,60),'importLog');
+}
+async function apiImport(url){
+  if(!hasApi()) return {ok:false,code:'API_OFF'};
+  const c=new AbortController(), t=setTimeout(()=>c.abort(),35000);
+  try{
+    const r=await fetch(apiUrl('/api/import-product'),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({url}),signal:c.signal});
+    return await r.json();
+  }catch(e){ return {ok:false,code:'API_UNREACHABLE',detail:String(e.message||e)}; }
+  finally{ clearTimeout(t); }
+}
+// Download a product picture so it is stored inside Closia (survives the store changing its URL).
+async function productImageBlob(u){
+  const tries=[]; if(hasApi()) tries.push(apiUrl('/api/product-image?url='+encodeURIComponent(u))); tries.push(u);
+  for(const src of tries){
+    try{ const r=await fetch(src,{mode:'cors',credentials:'omit',referrerPolicy:'no-referrer'}); if(!r.ok) continue;
+      const b=await r.blob(); if(/^image\//.test(b.type)&&b.size>800) return b; }catch(e){}
+  }
+  throw new Error('image');
+}
+function linkSheet(pre='',wish=false){
+  S._linkWish=wish; S._linkMeta=null;
+  openSheet(`<h2>${wish?'🤍 أضف للأمنيات':'من رابط منتج'}</h2>
+    <p class="hint" style="margin-top:-6px">افتح المنتج في المتجر ← زر المشاركة ← <b>نسخ الرابط</b>، والصقه هنا (تقدر تلصق نص المشاركة كامل).</p>
+    <div class="row" style="margin:12px 0"><textarea class="inp" id="lUrl" rows="2" dir="ltr" placeholder="الصق الرابط أو نص المشاركة كامل" style="flex:1;resize:none">${esc(pre)}</textarea>
+      <button class="btn" id="lPaste" style="flex:none">لصق</button></div>
+    <button class="btn primary block" id="lGo">جيب المنتج</button>
+    <div id="lRes"></div>
+    <button class="arow" id="lSafari" style="margin-top:14px"><span class="ai">🧭</span><span><b>زارا، H&M، ASOS ما تنقرأ؟</b><small>استخدم زر «أضف إلى Closia» من سفاري وأنت فاتح صفحة المنتج</small></span></button>`);
+  $('lPaste').onclick=async()=>{ try{ $('lUrl').value=(await navigator.clipboard.readText()).trim(); }catch(e){ toast('الصق بالضغط المطوّل على الخانة'); } };
+  $('lGo').onclick=()=>loadLink($('lUrl').value.trim());
+  $('lSafari').onclick=safariSheet;
+  if(pre) loadLink(pre);
+}
 async function loadLink(input){
   const box=$('lRes'); if(!box) return;
   const sh=splitShare(input), url=sh.url;
   if(!url){ toast('ما لقيت رابط في النص — انسخ رابط المنتج'); return; }
   S._linkMeta={name:sh.title,brand:brandFromUrl(url),cat:catFromText(sh.title+' '+url),url,store:true};
   box.innerHTML='<div class="spin" style="margin:24px auto"></div><p class="hint" style="text-align:center">أقرأ صفحة المنتج…</p>';
-  let p;
-  if(/\.(jpe?g|png|webp|avif|gif)(\?|$)/i.test(url)) p={name:'',brand:'',price:'',cur:'',imgs:[url]};
-  else { try{ p=parseProduct(await fetchPage(url),url); }catch(e){ p=null; } }
-  if(p){ if(!p.name||/^(shein|zara|h&m|noon|namshi)$/i.test(p.name)) p.name=sh.title||p.name; p.brand=p.brand||S._linkMeta.brand; }
-  if(!p||!p.imgs.length){
-    const m=S._linkMeta;
-    box.innerHTML=`<div class="empty" style="padding:22px 8px"><h3>المتجر منع قراءة الصفحة</h3>
-      ${m.name?`<div class="lmeta" style="text-align:start"><b>${esc(m.name)}</b><span>${esc(m.brand)} · حفظت الاسم — بس أحتاج الصورة</span></div>`:''}
-      <p class="hint" style="margin-top:10px">افتح المنتج في ${esc(m.brand||'المتجر')} ← اضغط مطوّل على صورة المنتج ← <b>نسخ</b>، وارجع اضغط:</p>
-      <button class="btn primary" id="lPasteImg" style="margin-top:6px">📋 الصق الصورة</button></div>`;
-    $('lPasteImg').onclick=()=>pasteImage(true); return;
-  }
+  const t0=Date.now();
+  let r;
+  if(/\.(jpe?g|png|webp|avif)(\?|$)/i.test(url)) r={ok:true,store:brandFromUrl(url),title:sh.title,images:[url],url};
+  else r=await apiImport(input);
+  const host=(()=>{ try{ return new URL(url).hostname; }catch(e){ return ''; } })();
+  logImport({via:'link',host,store:r.store||S._linkMeta.brand,ok:!!r.ok,code:r.code||'',detail:r.detail||'',ms:Date.now()-t0});
+  if(!$('lRes')) return;
+  if(!r.ok) return importFailed(box,r);
+  if(!r.title||/^(shein|zara|h&m|asos)$/i.test(r.title)) r.title=sh.title||r.title;
+  showImportPreview(box,r);
+}
+function importFailed(box,r){
+  const m=S._linkMeta||{}, store=r.store||m.brand||'المتجر';
+  box.innerHTML=`<div class="impfail">
+      <div class="ic">⚠️</div><h3>ما قدرت أسحب المنتج${r.store?` من ${esc(store)}`:''}</h3>
+      <p class="hint">${esc(IMPORT_MSG[r.code]||r.message||'صار خطأ غير متوقع.')}</p>
+      ${m.name?`<div class="lmeta" style="text-align:start"><b>${esc(m.name)}</b><span>حفظت الاسم — يبقى الصورة بس</span></div>`:''}
+    </div>
+    <div class="lbl" style="margin-top:14px">أضفها بطريقة ثانية:</div>
+    <div style="display:grid;gap:8px">
+      <button class="btn primary" id="fUpload">🖼️ ارفع صورة المنتج</button>
+      <div class="row"><button class="btn" id="fPaste">📋 الصق صورة</button><button class="btn" id="fSafari">🧭 زر سفاري</button></div>
+    </div>`;
+  $('fUpload').onclick=()=>{ S._pendingMeta=S._linkMeta; S._pendingWish=S._linkWish; closeSheet(); pickPhotos(); };
+  $('fPaste').onclick=()=>pasteImage(true);
+  $('fSafari').onclick=safariSheet;
+}
+function showImportPreview(box,p){
   const sel=new Set([0]);
+  const price=p.price?`${p.price} ${p.currency||''}`.trim():'';
   const draw=()=>{ box.innerHTML=`
-    ${p.name?`<div class="lmeta"><b>${esc(p.name)}</b><span>${esc([p.brand,p.price&&(p.price+' '+(p.cur||''))].filter(Boolean).join(' · '))}</span></div>`:''}
-    <div class="lbl" style="margin-top:12px">اختر الصورة اللي تبيها (تقدر أكثر من وحدة)</div>
-    <div class="lgrid" id="lGrid">${p.imgs.map((u,i)=>`<button class="${sel.has(i)?'on':''}" data-i="${i}"><img src="${IMG_PROXY(u,360)}" alt="" loading="lazy" onerror="this.parentNode.style.display='none'"></button>`).join('')}</div>
-    <button class="btn primary block" id="lAdd" style="margin-top:14px">✨ أضف ${sel.size>1?sel.size+' صور':'الصورة'} وشيل الخلفية</button>`;
-    $('lGrid').onclick=e=>{ const b=e.target.closest('[data-i]'); if(!b) return; const i=+b.dataset.i; sel.has(i)?sel.delete(i):sel.add(i); if(!sel.size) sel.add(i); draw(); };
+    <div class="impcard">
+      <div class="impimg"><img src="${esc(p.images[[...sel][0]]||p.images[0])}" referrerpolicy="no-referrer" alt=""></div>
+      <div class="tx"><span class="store">${esc(p.store||'')}</span><b>${esc(p.title||'منتج')}</b>${price?`<span class="price">${esc(price)}</span>`:''}</div>
+    </div>
+    ${p.images.length>1?`<div class="lbl" style="margin-top:12px">اختر الصور (تقدر أكثر من وحدة)</div>
+    <div class="lgrid" id="lGrid">${p.images.map((u,i)=>`<button class="${sel.has(i)?'on':''}" data-i="${i}"><img src="${esc(u)}" referrerpolicy="no-referrer" alt="" loading="lazy" onerror="this.parentNode.style.display='none'"></button>`).join('')}</div>`:''}
+    <button class="btn primary block" id="lAdd" style="margin-top:14px">✨ أضف ${sel.size>1?sel.size+' صور':''} للخزانة</button>`;
+    if($('lGrid')) $('lGrid').onclick=e=>{ const b=e.target.closest('[data-i]'); if(!b) return; const i=+b.dataset.i; sel.has(i)?sel.delete(i):sel.add(i); if(!sel.size) sel.add(i); draw(); };
     $('lAdd').onclick=async()=>{
-      busy(true,'أجيب الصور…'); const src=[];
-      const meta={name:p.name,brand:p.brand,price:p.cur&&p.cur!==curCode()?'':p.price,cat:catFromText(p.name+' '+sh.title+' '+url),url,store:true};
-      for(const i of [...sel].sort((a,b)=>a-b)){ try{ src.push({blob:await fetchImageBlob(p.imgs[i]),meta}); }catch(e){ console.warn(e); } }
-      busy(false); if(!src.length){ toast('ما قدرت أحمّل الصور — جرّب «الصق صورة»'); return; }
+      busy(true,'أحفظ الصور في Closia…'); const src=[], meta={name:p.title,brand:p.store&&!p.brand?p.store:p.brand,price:p.currency&&p.currency!==curCode()?'':p.price,
+        cat:catFromText((p.title||'')+' '+(p.url||'')),url:p.url,store:true};
+      for(const i of [...sel].sort((a,b)=>a-b)){ try{ src.push({blob:await productImageBlob(p.images[i]),meta:{...meta,sourceImage:p.images[i]}}); }catch(e){ console.warn(e); } }
+      busy(false);
+      if(!src.length){ logImport({via:'image',host:(()=>{try{return new URL(p.images[0]).hostname}catch(e){return ''}})(),store:p.store,ok:false,code:'IMAGE_BLOCKED'});
+        S._linkMeta={name:p.title,brand:p.brand||p.store,cat:meta.cat,url:p.url,store:true};
+        return importFailed(box,{code:'NO_IMAGE',store:p.store,message:'لقيت المنتج بس المتجر منع تحميل الصورة نفسها.'}); }
       closeSheet(); intake(src,{wish:S._linkWish}); };
   };
   draw();
+}
+// Data sent by the Safari button lands on #import=<json>
+function checkImportHash(){
+  const m=location.hash.match(/^#import=(.+)$/); if(!m) return;
+  history.replaceState(null,'',location.pathname+location.search);
+  let d; try{ d=JSON.parse(decodeURIComponent(m[1])); }catch(e){ toast('بيانات المنتج ناقصة'); return; }
+  if(!/^https:\/\//.test(d.u||'')){ toast('افتح صفحة المنتج في المتجر أول، بعدين اضغط الزر'); return; }
+  const p={ok:true,url:d.u,store:brandFromUrl(d.u)||'',title:String(d.n||'').slice(0,140),brand:d.b||'',price:String(d.pr||'').replace(/[^\d.]/g,''),currency:String(d.c||'').toUpperCase(),
+    images:(d.i||[]).filter(u=>/^https:\/\//.test(u)).slice(0,8)};
+  logImport({via:'safari',host:(()=>{try{return new URL(d.u).hostname}catch(e){return ''}})(),store:p.store,ok:p.images.length>0,code:p.images.length?'':'NO_IMAGE'});
+  S._linkWish=false; S._linkMeta={name:p.title,brand:p.brand||p.store,cat:catFromText(p.title+' '+p.url),url:p.url,store:true};
+  openSheet(`<h2>من سفاري</h2><div id="lRes"></div>`);
+  if(p.images.length) showImportPreview($('lRes'),p); else importFailed($('lRes'),{code:'NO_IMAGE',store:p.store});
+}
+const appUrl = () => location.origin+location.pathname.replace(/index\.html$/,'');
+function bookmarkletCode(){
+  const A=JSON.stringify(appUrl());
+  return `javascript:(()=>{const A=${A};const q=s=>[...document.querySelectorAll(s)];const m=n=>{const e=document.querySelector('meta[property="'+n+'"],meta[name="'+n+'"]');return e&&e.content||''};let p={};const w=o=>{if(!o||typeof o!='object'||p.n)return;if(Array.isArray(o))return o.forEach(w);const t=[].concat(o['@type']||[]).join(' ');if(/Product/.test(t)){const f=[].concat(o.offers||[])[0]||{};p={n:o.name,b:o.brand&&(o.brand.name||o.brand),pr:f.price||f.lowPrice||'',c:f.priceCurrency||'',i:[].concat(o.image||[]).map(x=>x&&(x.url||x.contentUrl||x))}}if(o['@graph'])w(o['@graph'])};q('script[type="application/ld+json"]').forEach(s=>{try{w(JSON.parse(s.textContent))}catch(e){}});const g=q('img').filter(i=>i.naturalWidth>=400&&i.getBoundingClientRect().width>100).sort((a,b)=>b.naturalWidth*b.naturalHeight-a.naturalWidth*a.naturalHeight).map(i=>i.currentSrc||i.src);const i=[...(p.i||[]),m('og:image'),m('twitter:image'),...g].filter(x=>typeof x=='string'&&x).map(u=>{try{return new URL(u,location.href).href.replace(/^http:/,'https:')}catch(e){return''}}).filter((u,k,a)=>u&&a.indexOf(u)==k&&!/^data:|\\.svg/.test(u)).slice(0,8);const d={u:location.href,n:p.n||m('og:title')||document.title,b:typeof p.b=='string'?p.b:'',pr:p.pr||m('product:price:amount'),c:p.c||m('product:price:currency'),i};location.href=A+'#import='+encodeURIComponent(JSON.stringify(d))})()`;
+}
+function safariSheet(){
+  openSheet(`<h2>🧭 زر «أضف إلى Closia» في سفاري</h2>
+    <p class="hint" style="margin-top:-6px">بعض المتاجر (زارا، H&M، ASOS، صفحات شي إن) تمنع أي خادم يقرأ صفحاتها. هالزر يشتغل داخل سفاري نفسه وأنت فاتح المنتج، فيقرأ الصورة والاسم والسعر من الصفحة اللي قدامك — بدون أي تحايل على حماية المتجر.</p>
+    <ol class="steps">
+      <li>اضغط <b>انسخ الكود</b> تحت.</li>
+      <li>في سفاري افتح أي صفحة ← زر المشاركة ← <b>إضافة إشارة مرجعية</b> ← سمّها «أضف إلى Closia» ← حفظ.</li>
+      <li>افتح <b>الإشارات المرجعية</b> ← اضغط مطوّل على «أضف إلى Closia» ← <b>تعديل</b> ← امسح الرابط والصق الكود ← تم.</li>
+      <li>من الحين: افتح أي منتج ← اكتب في شريط العنوان «أضف إلى Closia» واضغطها ← يفتح Closia بالمنتج جاهز.</li>
+    </ol>
+    <button class="btn primary block" id="bmCopy">📋 انسخ الكود</button>
+    <p class="hint" style="margin-top:10px">لو المتجر منع تحميل الصورة نفسها، اضغط مطوّل على صورة المنتج ← نسخ ← وارجع «الصق صورة».</p>`);
+  $('bmCopy').onclick=async()=>{ try{ await navigator.clipboard.writeText(bookmarkletCode()); toast('انتسخ ✓ الحين سوّ الإشارة المرجعية'); }catch(e){ prompt('انسخ الكود:',bookmarkletCode()); } };
+}
+async function importLogSheet(){
+  const log=(await DB.get('kv','importLog'))||[];
+  openSheet(`<h2>سجل الاستيراد</h2>
+    ${log.length?`<div class="implog">${log.map(e=>`<div class="${e.ok?'ok':'bad'}"><b>${e.ok?'✓':'✕'} ${esc(e.store||e.host||'-')}</b><span>${esc(e.ok?'نجح':(e.code||'فشل'))}${e.detail?' · '+esc(String(e.detail).slice(0,60)):''}</span><small>${new Date(e.t).toLocaleString(LOC,{day:'numeric',month:'short',hour:'2-digit',minute:'2-digit'})} · ${esc(e.via||'')}${e.ms?' · '+e.ms+'ms':''}</small></div>`).join('')}</div>
+      <button class="btn danger block" id="ilClear" style="margin-top:12px">مسح السجل</button>`:'<p class="hint">ما فيه محاولات للحين.</p>'}`);
+  if($('ilClear')) $('ilClear').onclick=async()=>{ await DB.put('kv',[],'importLog'); importLogSheet(); };
 }
 const curCode = () => ({'ر.س':'SAR','د.إ':'AED','د.ك':'KWD','ر.ق':'QAR','د.ب':'BHD','ر.ع':'OMR','$':'USD','€':'EUR'})[S.set.cur];
 
@@ -964,7 +1151,7 @@ function itemSheet(it){
     </div>
     ${inOutfits.length?`<div class="lbl">موجودة في ${inOutfits.length} أوتفت محفوظ</div>`:''}
     <div style="display:grid;gap:10px;margin-top:8px">
-      <button class="btn primary" id="iStyle">✨ نسّق عليها</button>
+      <button class="btn primary" id="iStyle">✨ نسّقها بـ ٤ ستايلات</button>
       <div class="row"><button class="btn" id="iLaundry">${it.laundry?'✓ طلعت من الغسيل':'🧺 بالغسيل'}</button><button class="btn" id="iEdit">${IC.edit} تعديل</button></div>
       ${it.out?`<button class="btn" id="iBack">↩️ رجّعها للخزانة (${it.out==='sell'?'كانت للبيع':'كانت للتبرع'})</button>`:''}
       <button class="btn danger" id="iDel">${IC.trash} حذف القطعة</button>
@@ -973,7 +1160,7 @@ function itemSheet(it){
   $('iFav').onclick=async()=>{ it.fav=!it.fav; await DB.put('items',it); itemSheet(it); render(); };
   $('iLaundry').onclick=async()=>{ it.laundry=!it.laundry; await DB.put('items',it); S.results=[]; itemSheet(it); render(); toast(it.laundry?'حطيتها بالغسيل — ما بقترحها لين ترجع':'رجعت للخزانة ✓'); };
   $('iEdit').onclick=()=>editItem([{...it,tags:[...(it.tags||[])],occs:[...(it.occs||[])],seasons:[...(it.seasons||['all'])]}],0,false);
-  $('iStyle').onclick=()=>{ closeSheet(); S.locks={[it.cat]:it.id}; S.results=[]; S.oTab='style'; go('outfits'); };
+  $('iStyle').onclick=()=>pieceWaysSheet(it);
   $('iDel').onclick=async()=>{ if(!confirm('أكيد تبي تحذف القطعة؟')) return;
     await DB.del('items',it.id); S.items=S.items.filter(x=>x.id!==it.id);
     for(const o of S.outfits.filter(o=>o.ids.includes(it.id))){ o.ids=o.ids.filter(x=>x!==it.id); if(o.layout) o.layout=o.layout.filter(l=>l.id!==it.id);
@@ -993,7 +1180,7 @@ async function editItem(list,i,isNew){
     ${it._src?`<div class="imgtools">
       <div class="seg ${it._alpha?'':'hidden'}" id="eBg"><button class="${it.useCut!==false?'on':''}" data-v="1">✂️ بدون خلفية</button><button class="${it.useCut!==false?'':'on'}" data-v="0">🖼️ الأصلية</button></div>
       ${!it._alpha?`<p class="hint" style="margin:0">ما قدرت أشيل الخلفية تلقائياً — جرّب الذكاء الاصطناعي أو امسحها بيدك.</p>`:''}
-      <div class="row">${it.maskKind!=='ai'?`<button class="btn" id="eAI">✨ شيل الخلفية بالذكاء الاصطناعي</button>`:''}<button class="btn" id="eTouch">🖌️ تعديل يدوي</button></div>
+      <div class="row">${it.maskKind!=='ai'&&it.maskKind!=='ai2'?`<button class="btn" id="eAI">✨ اعزل القطعة بالذكاء الاصطناعي</button>`:''}<button class="btn" id="eTouch">🖌️ تعديل يدوي</button></div>
       <label class="tgl"><input type="checkbox" id="eEnh" ${it.enh!==false?'checked':''}><span>✨ تحسين تلقائي للإضاءة والألوان</span></label>
       <div class="slider"><span>🔅</span><input type="range" id="eBright" min="-0.5" max="0.5" step="0.05" value="${it.bright||0}"><span>🔆</span></div>
     </div>`:''}
@@ -1015,6 +1202,7 @@ async function editItem(list,i,isNew){
     <div class="field"><label>الستايل ${it.style?'':'<span style="opacity:.7">— خمّنته، عدّله إذا غلط</span>'}</label><div class="wrapchips" id="eSty">
       ${STYLES.map(x=>`<button class="chip ${styleOf(it)===x.id?'on':''}" data-v="${x.id}">${x.ar}</button>`).join('')}</div></div>
     <div class="field"><label>القصّة</label><div class="seg" id="eFit">${FITS.map(x=>`<button class="${fitOf(it)===x.id?'on':''}" data-v="${x.id}">${x.ar}</button>`).join('')}</div></div>
+    <div class="field"><label>الخامة ${it.fabric?'':'<span style="opacity:.7">— خمّنتها</span>'}</label><div class="wrapchips" id="eFab">${FABRICS.map(x=>`<button class="chip ${fabOf(it).id===x.id?'on':''}" data-v="${x.id}">${x.ar}</button>`).join('')}</div></div>
     <div class="field"><label>النقشة</label><div class="wrapchips" id="ePat">${PATTERNS.map(x=>`<button class="chip ${patOf(it)===x.id?'on':''}" data-v="${x.id}">${x.ar}</button>`).join('')}</div></div>
     <div class="field"><label>تاقات (افصل بفاصلة)</label><input class="inp" id="eTags" value="${esc((it.tags||[]).join('، '))}" placeholder="مثلاً: كتان، رسمي، هدية"></div>
     <div class="row" style="margin-top:6px">
@@ -1023,7 +1211,8 @@ async function editItem(list,i,isNew){
     </div>`);
   const single=(box,fn)=>$(box).onclick=e=>{ const b=e.target.closest('[data-v]'); if(!b) return;
     $(box).querySelectorAll('[data-v]').forEach(x=>x.classList.toggle('on',x===b)); fn(b.dataset.v); };
-  single('eCat',v=>{ it.cat=v; $('eName').placeholder=CAT[v].ph; });
+  single('eCat',v=>{ it.cat=v; $('eName').placeholder=CAT[v].ph;
+    if(it._an&&ClosiaCutout.onModel(it._an)){ it._alpha=cutoutAlpha(it._an,it._src,v); it.useCut=true; refresh(); toast('عزلت '+CAT[v].ar+' من الصورة ✓'); } });
   single('eCol',v=>{ it.color=v; it._colorAuto=$('eAuto').classList.contains('on'); $('eCName').textContent=colorInfo(v).name; });
   const refresh=()=>{ recompose(it); $('ePrev').src=it.img; $('ePrev').className=it.cut?'':'full';
     if(it._colorAuto){ $('eAuto').dataset.v=it.color; $('eAuto').style.background=it.color; $('eCName').textContent=colorInfo(it.color).name; } };
@@ -1035,17 +1224,18 @@ async function editItem(list,i,isNew){
       $('eBg').querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.v==='1')); });
     if($('eAI')) $('eAI').onclick=async()=>{
       busy(true,'✨ أشيل الخلفية بالذكاء الاصطناعي…');
-      try{ it._alpha=await aiAlpha(it._src,p=>busy(true,`أنزّل محرك الذكاء الاصطناعي — مرة وحدة بس… ${Math.round(p*100)}%`)); it.maskKind='ai'; it.useCut=true; busy(false); editItem(list,i,isNew); }
+      try{ it._an=await cutoutAnalyse(it._src); it._alpha=cutoutAlpha(it._an,it._src,it.cat); it._matte=Uint8ClampedArray.from(it._an.alpha,v=>v*255);
+        it.maskKind='ai2'; it.useCut=true; recompose(it,true); busy(false); editItem(list,i,isNew); }
       catch(e){ console.warn(e); busy(false); toast('ما قدرت — تأكد إنك متصل بالنت أول مرة'); } };
   }
   single('eSea',v=>{ it.seasons=[v]; });
-  single('eSty',v=>{ it.style=v; }); single('eFit',v=>{ it.fit=v; }); single('ePat',v=>{ it.pattern=v; });
+  single('eSty',v=>{ it.style=v; }); single('eFab',v=>{ it.fabric=v; }); single('eFit',v=>{ it.fit=v; }); single('ePat',v=>{ it.pattern=v; });
   $('eOcc').onclick=e=>{ const b=e.target.closest('[data-v]'); if(!b) return; b.classList.toggle('on'); it.occs=[...$('eOcc').querySelectorAll('.on')].map(x=>x.dataset.v); };
   const next=()=>{ if(isNew&&i<list.length-1) editItem(list,i+1,true); else closeSheet(); };
   $('eSave').onclick=async()=>{
     it.name=$('eName').value.trim(); it.brand=$('eBrand').value.trim(); it.size=$('eSize').value.trim();
     it.price=$('ePrice').value.replace(/[^\d.]/g,''); it.tags=$('eTags').value.split(/[,،]/).map(s=>s.trim()).filter(Boolean);
-    if(it._src){ it.src=it._src.toDataURL('image/jpeg',.85); it.mask=it._alpha?alphaToURL(it._alpha,it._src.width,it._src.height):null; }
+    if(it._src){ recompose(it,true); it.src=it._src.toDataURL('image/jpeg',.88); it.mask=it._alpha?alphaToURL(it._alpha,it._src.width,it._src.height):null; }
     const rec={}; for(const k in it) if(k[0]!=='_') rec[k]=it[k];
     if(rec.wish){ await DB.put('wish',rec); const k=S.wish.findIndex(x=>x.id===rec.id); if(k<0) S.wish.push(rec); else S.wish[k]=rec;
       toast('انضافت للأمنيات 🤍'); if(isNew&&i<list.length-1) return next(); closeSheet(); return wishSheet(rec); }
@@ -1084,19 +1274,26 @@ function renderStylist(){
     ${wxBarHTML()}
     <div class="chips" id="occPick">${OCCS.map(x=>`<button class="chip ${S.occ===x.id?'on':''}" data-v="${x.id}">${x.e} ${x.ar}</button>`).join('')}</div>
     <div class="seg" id="wxPick" style="margin-bottom:12px">${WX.map(w=>`<button class="${S.wx===w.id?'on':''}" data-v="${w.id}">${w.e} ${w.ar}</button>`).join('')}</div>
-    <div class="lbl">الستايل</div>
+    <div class="lbl">الإحساس</div>
+    <div class="vibes" id="vibePick"><button class="${S.vibe==='all'?'on':''}" data-v="all"><span>🪄</span>فاجئني</button>${VIBES.map(v=>`<button class="${S.vibe===v.id?'on':''}" data-v="${v.id}"><span>${v.e}</span>${v.ar}</button>`).join('')}</div>
+    <div class="lbl">الفورمولا</div>
     <div class="chips" id="lookPick"><button class="chip ${S.look==='all'?'on':''}" data-v="all">🪄 فاجئني</button>${LOOKS.map(l=>`<button class="chip ${S.look===l.id?'on':''}" data-v="${l.id}">${l.e} ${l.ar}</button>`).join('')}</div>`;
   if(!o){ b.innerHTML=head+`<div class="empty"><div class="big">🤔</div><h3>ما لقيت تركيبة تناسب</h3><p class="hint">${S.look!=='all'?`قطعك الحالية ما تكفي لستايل «${LOOK[S.look].ar}». جرّب «فاجئني» أو ستايل ثاني.`:'جرّب مناسبة أو جو ثاني، أو فك القفل.'}</p></div>`; bindStyleHead(); return; }
   const ps=sortPieces(o.pieces), saved=S.outfits.some(x=>x.key===o.key), ex=explain(o);
   S.shown.add(o.key);
   b.innerHTML=head+`<div class="ocard">
+      ${ex.vibe?`<span class="vibetag">${ex.vibe.e} ${ex.vibe.ar}</span>`:''}
       <div class="lookhead"><b>${ex.title}</b><span class="score">تناسق ${pct(o.s)}%</span></div>
       <p class="lookdesc">${ex.desc}</p>
       ${boardHTML(autoLayout(ps))}
       <div class="pieces" id="pcs">${ps.map(p=>`<div class="pc"><div class="im"><img src="${p.img}" alt=""></div>
         <button class="lk ${S.locks[p.cat]===p.id?'on':''}" data-cat="${p.cat}" data-id="${p.id}" aria-label="ثبّت">${S.locks[p.cat]===p.id?IC.lock:IC.unlock}</button></div>`).join('')}</div>
-      <div class="meta"><div class="pal">${ps.map(p=>`<i style="background:${p.color}"></i>`).join('')}</div></div>
+      <div class="meta"><div class="pal">${ps.map(p=>`<i style="background:${p.color}"></i>`).join('')}</div>
+        <div class="fabs">${ex.fabrics.map(f=>`<span>${esc(f)}</span>`).join('')}</div></div>
       <ul class="why">${ex.points.map(t=>`<li>${esc(t)}</li>`).join('')}</ul>
+      ${ex.tips.length||ex.missing.length?`<div class="note"><b>💬 لمسة الستايلست</b>
+        ${ex.tips.map(t=>`<p>${esc(t)}</p>`).join('')}
+        ${ex.missing.length?`<p class="miss">تكمّلها بـ: ${ex.missing.map(esc).join(' · ')}</p>`:''}</div>`:''}
       <div class="pager">${S.results.map((_,i)=>`<i class="${i===S.idx?'on':''}"></i>`).join('')}</div>
       <div class="row" style="margin-bottom:10px">
         <button class="btn sq" id="oFav" style="color:${saved?'var(--hi)':'inherit'}" aria-label="حفظ">${saved?IC.heartF:IC.heart}</button>
@@ -1127,11 +1324,30 @@ function renderStylist(){
     if(S.planDate){ S.planDate=null; S.wxManual=false; toast('انضاف للتقويم 📅'); S.view='plan'; go('plan'); }
     else { toast('تمام ✓ سجلته بالتقويم'); renderStylist(); } };
 }
+function pieceWaysSheet(it){
+  busy(true,'أفكّر في ٤ طرق لها…');
+  setTimeout(()=>{
+    const used=new Set(), ways=[];
+    for(const v of ['casual','elegant','street','chic']){ const o=generate({locks:{[it.cat]:it.id},vibe:v,look:'all',n:1,occ:null,ignoreRecent:true,avoid:used})[0];
+      if(o&&!used.has(o.key)){ used.add(o.key); ways.push({v,o}); } }
+    busy(false);
+    if(!ways.length){ toast('أحتاج قطع أكثر عشان أنسّق عليها'); return; }
+    openSheet(`<div class="sheethead"><h2>✨ قطعة وحدة، ${ways.length} ستايلات</h2></div>
+      <p class="hint" style="margin-top:-8px">${esc(itemName(it))} — نفس القطعة بإحساس مختلف كل مرة.</p>
+      <div class="ways" id="ways">${ways.map((w,i)=>{ const ex=explain(w.o); return `<button class="way" data-i="${i}">
+        <span class="vibetag">${VIBE[w.v].e} ${VIBE[w.v].ar}</span>${boardHTML(autoLayout(sortPieces(w.o.pieces)))}
+        <b>${ex.title}</b><small>${esc(ex.points[0]||ex.tips[0]||VIBE[w.v].d)}</small></button>`; }).join('')}</div>`);
+    $('ways').onclick=e=>{ const b=e.target.closest('[data-i]'); if(!b) return; const w=ways[+b.dataset.i];
+      closeSheet(); S.vibe=w.v; S.look='all'; S.locks={[it.cat]:it.id}; S.planDate=null;
+      S.results=[w.o,...generate({vibe:w.v,look:'all'}).filter(x=>x.key!==w.o.key)].slice(0,6); S.idx=0; S.oTab='style'; go('outfits'); };
+  },40);
+}
 function bindStyleHead(){
   $('occPick').onclick=e=>{ const b=e.target.closest('[data-v]'); if(!b) return; S.occ=b.dataset.v; S.results=[]; renderStylist(); };
   $('wxPick').onclick=e=>{ const b=e.target.closest('[data-v]'); if(!b) return; S.wx=b.dataset.v; S.wxManual=true; S.results=[]; renderStylist(); };
   $('wxGet').onclick=()=>{ S.wxManual=false; fetchWeather(true); };
   $('lookPick').onclick=e=>{ const b=e.target.closest('[data-v]'); if(!b) return; S.look=b.dataset.v; S.results=[]; renderStylist(); };
+  $('vibePick').onclick=e=>{ const b=e.target.closest('[data-v]'); if(!b) return; S.vibe=b.dataset.v; S.results=[]; S.shown=new Set(); renderStylist(); };
   if($('pnX')) $('pnX').onclick=()=>{ S.planDate=null; S.wxManual=false; S.results=[]; renderStylist(); };
 }
 function renderSaved(){
@@ -1234,7 +1450,8 @@ $('bTools').onclick=e=>{ const b=e.target.closest('[data-a]'); if(!b||!B.sel) re
 /* ---------------- manual touch-up (erase / restore / rotate) ---------------- */
 const TU={};
 function openTouch(it,onDone){
-  Object.assign(TU,{it,onDone,src:it._src,orig:it._alpha?new Uint8ClampedArray(it._alpha):null,mode:'erase',undo:[]});
+  Object.assign(TU,{it,onDone,src:it._src,orig:it._alpha?new Uint8ClampedArray(it._alpha):null,mode:'erase',undo:[],matte:it._matte||null});
+  $('tMode').querySelector('[data-v="smart"]').classList.toggle('hidden',!it._matte);
   TU.alpha=it._alpha?new Uint8ClampedArray(it._alpha):new Uint8ClampedArray(it._src.width*it._src.height).fill(255);
   $('tMode').querySelectorAll('button').forEach(b=>b.classList.toggle('on',b.dataset.v==='erase'));
   $('touch').classList.add('on'); requestAnimationFrame(()=>{ tuPrep(); tuFit(); tuDraw(); });
@@ -1249,27 +1466,45 @@ function tuPrep(){
 function tuFit(){
   const st=$('tStage').getBoundingClientRect(), w=TU.src.width, h=TU.src.height;
   const k=Math.min((st.width-32)/w,(st.height-12)/h); $('tCv').style.width=w*k+'px'; $('tCv').style.height=h*k+'px'; TU.k=k;
+  tuZoom(1,0,0);
 }
+function tuZoom(z,tx,ty){ TU.z=z; TU.tx=tx; TU.ty=ty; $('tCv').style.transform=`translate(${tx}px,${ty}px) scale(${z})`; $('tZoom').classList.toggle('hidden',z<=1.01); }
 function tuDraw(){ const d=TU.out.data, a=TU.alpha; for(let i=0;i<a.length;i++) d[i*4+3]=a[i]; $('tTop').getContext('2d').putImageData(TU.out,0,0); }
-function tuPaint(x,y){
-  const w=TU.src.width,h=TU.src.height, r=+$('tSize').value/TU.k/2, a=TU.alpha, er=TU.mode==='erase';
+function tuPaint(x,y,r){
+  const w=TU.src.width,h=TU.src.height, a=TU.alpha, mode=TU.mode, m=TU.matte;
   const x0=Math.max(0,Math.floor(x-r)),x1=Math.min(w-1,Math.ceil(x+r)),y0=Math.max(0,Math.floor(y-r)),y1=Math.min(h-1,Math.ceil(y+r));
   for(let yy=y0;yy<=y1;yy++) for(let xx=x0;xx<=x1;xx++){ const dd=Math.hypot(xx-x,yy-y); if(dd>r) continue;
-    const f=clamp((r-dd)/(r*.35),0,1), i=yy*w+xx; a[i]=er?Math.min(a[i],255*(1-f)):Math.max(a[i],255*f); }
+    const f=clamp((r-dd)/(r*.35),0,1), i=yy*w+xx;
+    if(mode==='erase') a[i]=Math.min(a[i],255*(1-f));
+    else if(mode==='smart'&&m) a[i]=Math.max(a[i],m[i]*f);      // restore along the AI matte's own edges
+    else a[i]=Math.max(a[i],255*f); }
 }
 (()=>{
-  const cv=$('tCv'), cur=$('tCur'); let last=null, raf=0;
-  const pos=e=>{ const r=cv.getBoundingClientRect(); return {x:(e.clientX-r.left)/TU.k,y:(e.clientY-r.top)/TU.k,cx:e.clientX-r.left,cy:e.clientY-r.top}; };
-  const showCur=p=>{ const s=+$('tSize').value; Object.assign(cur.style,{display:'block',left:p.cx+'px',top:p.cy+'px',width:s+'px',height:s+'px'}); };
-  cv.addEventListener('pointerdown',e=>{ cv.setPointerCapture(e.pointerId); TU.undo.push(new Uint8ClampedArray(TU.alpha)); if(TU.undo.length>20) TU.undo.shift();
-    const p=pos(e); last=p; tuPaint(p.x,p.y); tuDraw(); showCur(p); });
-  cv.addEventListener('pointermove',e=>{ if(!last) return; const p=pos(e), r=+$('tSize').value/TU.k/2;
+  const cv=$('tCv'), cur=$('tCur'), pts=new Map(); let last=null, raf=0, pinch=null;
+  const scale=()=>cv.getBoundingClientRect().width/TU.src.width;
+  const pos=e=>{ const r=cv.getBoundingClientRect(), s=r.width/TU.src.width; return {x:(e.clientX-r.left)/s,y:(e.clientY-r.top)/s,cx:(e.clientX-r.left)/TU.z,cy:(e.clientY-r.top)/TU.z}; };
+  const brush=()=>+$('tSize').value/2/scale();
+  const showCur=p=>{ const s=+$('tSize').value/TU.z; Object.assign(cur.style,{display:'block',left:p.cx+'px',top:p.cy+'px',width:s+'px',height:s+'px',borderWidth:2/TU.z+'px'}); };
+  cv.addEventListener('pointerdown',e=>{ cv.setPointerCapture(e.pointerId); pts.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(pts.size===2){ // second finger: undo the dot of the first and start pinch-zoom
+      if(last){ const u=TU.undo.pop(); if(u) TU.alpha=u; last=null; cur.style.display='none'; tuDraw(); }
+      const [a,b]=[...pts.values()], r=cv.getBoundingClientRect();
+      pinch={d0:Math.hypot(a.x-b.x,a.y-b.y),z0:TU.z,mx:(a.x+b.x)/2,my:(a.y+b.y)/2,lx:r.left-TU.tx,ly:r.top-TU.ty,tx0:TU.tx,ty0:TU.ty}; return; }
+    if(pts.size>2) return;
+    TU.undo.push(new Uint8ClampedArray(TU.alpha)); if(TU.undo.length>20) TU.undo.shift();
+    const p=pos(e); last=p; tuPaint(p.x,p.y,brush()); tuDraw(); showCur(p); });
+  cv.addEventListener('pointermove',e=>{ if(!pts.has(e.pointerId)) return; pts.set(e.pointerId,{x:e.clientX,y:e.clientY});
+    if(pinch&&pts.size>=2){ const [a,b]=[...pts.values()], z=clamp(pinch.z0*Math.hypot(a.x-b.x,a.y-b.y)/pinch.d0,1,6);
+      const mx=(a.x+b.x)/2, my=(a.y+b.y)/2, px=(pinch.mx-pinch.lx-pinch.tx0)/pinch.z0, py=(pinch.my-pinch.ly-pinch.ty0)/pinch.z0;
+      tuZoom(z,mx-pinch.lx-px*z,my-pinch.ly-py*z); return; }
+    if(!last) return; const p=pos(e), r=brush();
     const n=Math.max(1,Math.ceil(Math.hypot(p.x-last.x,p.y-last.y)/(r/3)));
-    for(let k=1;k<=n;k++) tuPaint(last.x+(p.x-last.x)*k/n,last.y+(p.y-last.y)*k/n);
+    for(let k=1;k<=n;k++) tuPaint(last.x+(p.x-last.x)*k/n,last.y+(p.y-last.y)*k/n,r);
     last=p; showCur(p); cancelAnimationFrame(raf); raf=requestAnimationFrame(tuDraw); });
-  const end=()=>{ last=null; cur.style.display='none'; tuDraw(); };
+  const end=e=>{ pts.delete(e.pointerId); if(pts.size<2) pinch=null; if(!pts.size){ last=null; cur.style.display='none'; tuDraw(); } };
   cv.addEventListener('pointerup',end); cv.addEventListener('pointercancel',end);
 })();
+$('tZoom').onclick=()=>tuZoom(1,0,0);
 $('tMode').onclick=e=>{ const b=e.target.closest('[data-v]'); if(!b) return; TU.mode=b.dataset.v; $('tMode').querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b)); };
 $('tUndo').onclick=()=>{ const a=TU.undo.pop(); if(a&&a.length===TU.alpha.length){ TU.alpha=a; tuDraw(); } };
 $('tReset').onclick=()=>{ TU.undo.push(new Uint8ClampedArray(TU.alpha)); TU.alpha=TU.orig&&TU.orig.length===TU.alpha.length?new Uint8ClampedArray(TU.orig):TU.alpha.fill(255); tuDraw(); };
@@ -1277,9 +1512,10 @@ $('tRot').onclick=()=>{ // rotate photo and mask 90° clockwise
   const w=TU.src.width,h=TU.src.height, c=mkCanvas(h,w), x=c.getContext('2d');
   x.translate(h,0); x.rotate(Math.PI/2); x.drawImage(TU.src,0,0); TU.src=c;
   const a=new Uint8ClampedArray(w*h); for(let y=0;y<h;y++) for(let xx=0;xx<w;xx++) a[xx*h+(h-1-y)]=TU.alpha[y*w+xx];
+  if(TU.matte){ const m=new Uint8ClampedArray(w*h); for(let y=0;y<h;y++) for(let xx=0;xx<w;xx++) m[xx*h+(h-1-y)]=TU.matte[y*w+xx]; TU.matte=m; }
   TU.alpha=a; TU.undo=[]; TU.orig=null; tuPrep(); tuFit(); tuDraw(); };
 $('tCancel').onclick=()=>$('touch').classList.remove('on');
-$('tDone').onclick=()=>{ const it=TU.it; it._src=TU.src; it._alpha=TU.alpha; it.maskKind='manual'; $('touch').classList.remove('on'); TU.onDone&&TU.onDone(); };
+$('tDone').onclick=()=>{ const it=TU.it; it._src=TU.src; it._alpha=TU.alpha; it._matte=TU.matte; it.maskKind='manual'; $('touch').classList.remove('on'); TU.onDone&&TU.onDone(); };
 addEventListener('resize',()=>{ if($('touch').classList.contains('on')) tuFit(); });
 
 /* ================= extras: wishlist, closet review, category picker, basics library, sharing ================= */
@@ -1693,9 +1929,15 @@ function insight(catN){
 $('settingsBtn').onclick=()=>{
   openSheet(`<h2>الإعدادات</h2>
     <div class="field"><label>العملة</label><div class="wrapchips" id="sCur">${CURS.map(c=>`<button class="chip ${S.set.cur===c?'on':''}" data-v="${c}">${c}</button>`).join('')}</div></div>
+    <div class="field"><label>ألوانك المفضّلة — أعطيها أولوية في التنسيق</label>
+      <div class="swatches" id="sFav">${PALETTE.map(p=>`<button class="sw ${(S.set.favColors||[]).includes(p[0])?'on':''}" data-v="${p[0]}" style="background:${p[0]}" aria-label="${p[1]}"></button>`).join('')}</div></div>
+    <div class="field"><label>الاستيراد من المتاجر</label>
+      <input class="inp" id="sApi" dir="ltr" placeholder="رابط خدمة الاستيراد (مثلاً https://closia.vercel.app)" value="${esc(S.set.apiBase||window.CLOSIA_API||'')}">
+      <p class="hint" style="margin-top:6px">${hasApi()?'✓ الاستيراد التلقائي مفعّل':'الاستيراد التلقائي يحتاج خدمة Closia (Vercel). بدونها تقدر تستخدم زر سفاري أو تلصق الصورة.'}</p>
+      <div class="row"><button class="btn" id="sSafari">🧭 زر سفاري</button><button class="btn" id="sLog">🧾 سجل الاستيراد</button></div></div>
     <div class="field"><label>إزالة الخلفية</label>
-      <label class="tgl"><input type="checkbox" id="sAI" ${S.set.aiBg!==false?'checked':''}><span>✨ بالذكاء الاصطناعي (أدق — يشتغل على أي خلفية)</span></label>
-      <p class="hint" style="margin-top:6px">أول مرة ينزّل محرك صغير (~٤٠ ميقا) ويشتغل بعدها على جوالك بدون نت. صورك ما تطلع من جوالك أبد.</p></div>
+      <label class="tgl"><input type="checkbox" id="sAI" ${S.set.aiBg!==false?'checked':''}><span>✨ عزل القطعة بالذكاء الاصطناعي (احترافي — يفصل الملابس حتى لو أحد لابسها)</span></label>
+      <p class="hint" style="margin-top:6px">أول مرة ينزّل المحرك (~٧٥ ميقا) ويشتغل بعدها على جوالك بدون نت. صورك ما تطلع من جوالك أبد.</p></div>
     <div class="field"><label>الجو</label><button class="btn block" id="sWx">${IC.pin} ${S.set.wxOn?'تحديث الجو من موقعي':'استخدم موقعي لجو حقيقي'}</button>
       <p class="hint" style="margin-top:6px">موقعك يروح بس لخدمة الطقس المجانية Open-Meteo، وما ينحفظ.</p></div>
     <div class="field"><label>النسخة الاحتياطية</label>
@@ -1706,6 +1948,10 @@ $('settingsBtn').onclick=()=>{
   $('sCur').onclick=async e=>{ const b=e.target.closest('[data-v]'); if(!b) return; S.set.cur=b.dataset.v; await saveSet();
     $('sCur').querySelectorAll('.chip').forEach(x=>x.classList.toggle('on',x===b)); render(); };
   $('sAI').onchange=async e=>{ S.set.aiBg=e.target.checked; await saveSet(); };
+  $('sFav').onclick=async e=>{ const b=e.target.closest('[data-v]'); if(!b) return; const f=new Set(S.set.favColors||[]);
+    f.has(b.dataset.v)?f.delete(b.dataset.v):f.add(b.dataset.v); S.set.favColors=[...f]; b.classList.toggle('on'); S.results=[]; S.hero=null; await saveSet(); };
+  $('sApi').onchange=async e=>{ S.set.apiBase=e.target.value.trim(); await saveSet(); toast('انحفظ ✓'); };
+  $('sSafari').onclick=safariSheet; $('sLog').onclick=importLogSheet;
   $('sWx').onclick=()=>{ closeSheet(); S.wxManual=false; fetchWeather(true); };
   $('bExp').onclick=exportData;
   $('bImp').onclick=()=>{ $('importIn').value=''; $('importIn').click(); };
@@ -1750,6 +1996,7 @@ async function load(){
   try{ await load(); }catch(e){ console.error(e); toast('ما قدرت أفتح التخزين'); }
   if(navigator.storage&&navigator.storage.persist) navigator.storage.persist().catch(()=>{});
   go('closet');
+  checkImportHash(); addEventListener('hashchange',checkImportHash);
   // refresh weather silently if the user turned it on before and permission is already granted
   if(S.set.wxOn&&(!S.wxInfo||Date.now()-S.wxInfo.at>3*3600e3)){
     try{ const p=await navigator.permissions.query({name:'geolocation'}); if(p.state==='granted') fetchWeather(false); }catch(e){}

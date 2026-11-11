@@ -252,7 +252,9 @@ nav.tabs .add svg{width:26px;height:26px}
 .slider{display:flex;align-items:center;gap:10px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:8px 14px}
 .slider input{flex:1;accent-color:var(--fg)}
 .tstage{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:6px 16px}
-.tcv{position:relative;touch-action:none;border-radius:16px;overflow:hidden;
+.tstage{position:relative;overflow:hidden}
+.tzoom{position:absolute;top:10px;inset-inline-start:24px;z-index:2;background:var(--dark);color:var(--on-dark);border-radius:999px;padding:6px 12px;font-size:13px}
+.tcv{transform-origin:0 0;position:relative;touch-action:none;border-radius:16px;overflow:hidden;
   background:repeating-conic-gradient(var(--tile) 0 25%,var(--surface) 0 50%) 0 0/20px 20px}
 .tcv canvas{position:absolute;inset:0;width:100%;height:100%}
 #tBase{opacity:.28}
@@ -478,6 +480,42 @@ body.home header.top{display:none}
 .rvbtns b{font-size:14px}
 #lbPrev img{padding:10%}
 a.btn{text-decoration:none}
+.impfail{text-align:center;padding:18px 6px 4px}
+.impfail .ic{font-size:30px;width:64px;height:64px;border-radius:50%;background:var(--surface);border:1px solid var(--line);display:grid;place-items:center;margin:0 auto 10px}
+.impfail h3{font-size:18px;font-weight:800;margin-bottom:6px}
+.impcard{display:flex;gap:14px;align-items:center;background:var(--surface);border:1px solid var(--line);border-radius:22px;padding:10px;margin-top:14px}
+.impimg{width:96px;aspect-ratio:3/4;border-radius:16px;background:#F3F3F3;overflow:hidden;flex:none}
+.impimg img{width:100%;height:100%;object-fit:cover}
+.impcard .tx{display:flex;flex-direction:column;gap:4px;min-width:0}
+.impcard .store{font-size:12px;color:var(--muted);font-weight:600;letter-spacing:.3px}
+.impcard b{font-size:15px;line-height:1.5;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.impcard .price{font-weight:800;font-size:16px}
+.steps{padding-inline-start:20px;line-height:1.9;font-size:14px;margin:12px 0 16px}
+.steps li{margin-bottom:6px}
+.implog{display:grid;gap:8px}
+.implog>div{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:10px 12px;display:grid;gap:2px}
+.implog b{font-size:14px}
+.implog .bad b{color:var(--bad)}
+.implog span{font-size:13px}
+.implog small{font-size:11.5px;color:var(--muted)}
+.vibes{display:flex;gap:8px;overflow-x:auto;scrollbar-width:none;margin:0 -16px 12px;padding:2px 16px}
+.vibes::-webkit-scrollbar{display:none}
+.vibes button{flex:none;display:flex;flex-direction:column;align-items:center;gap:4px;width:74px;padding:10px 4px;border-radius:20px;background:var(--surface);border:1px solid var(--line);font-size:12.5px;font-weight:600}
+.vibes button span{font-size:22px}
+.vibes button.on{background:var(--dark);color:var(--on-dark);border-color:var(--dark)}
+.vibetag{display:inline-block;font-size:11.5px;font-weight:600;letter-spacing:.3px;background:var(--dark);color:var(--on-dark);border-radius:999px;padding:4px 10px;margin:2px 2px 8px}
+.fabs{display:flex;gap:6px;flex-wrap:wrap;margin-inline-start:auto}
+.fabs span{font-size:11.5px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 9px}
+.note{background:var(--tile);border-radius:18px;padding:12px 14px;margin:0 0 12px}
+.note b{display:block;font-size:13.5px;margin-bottom:6px}
+.note p{margin:0 0 6px;font-size:13.5px;line-height:1.75}
+.note .miss{color:var(--muted);margin:0}
+.ways{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.way{display:flex;flex-direction:column;gap:6px;text-align:start;background:var(--surface);border:1px solid var(--line);border-radius:22px;padding:10px}
+.way .vibetag{align-self:flex-start;margin:0}
+.way .board{border-radius:16px}
+.way b{font-size:14px}
+.way small{font-size:12px;color:var(--muted);line-height:1.6}
 </style>
 </head>
 <body>
@@ -526,12 +564,12 @@ a.btn{text-decoration:none}
     <h3>تعديل يدوي</h3>
     <button class="btn primary" id="tDone">تم</button>
   </div>
-  <div class="tstage" id="tStage"><div class="tcv" id="tCv"><canvas id="tBase"></canvas><canvas id="tTop"></canvas><div class="tcur" id="tCur"></div></div></div>
+  <div class="tstage" id="tStage"><button class="tzoom hidden" id="tZoom">🔍 1×</button><div class="tcv" id="tCv"><canvas id="tBase"></canvas><canvas id="tTop"></canvas><div class="tcur" id="tCur"></div></div></div>
   <div class="tpanel">
-    <div class="seg" id="tMode"><button class="on" data-v="erase">🧽 امسح الخلفية</button><button data-v="restore">🖌️ رجّع جزء</button></div>
+    <div class="seg" id="tMode"><button class="on" data-v="erase">🧽 امسح</button><button data-v="smart">✨ رجّع بدقة</button><button data-v="restore">🖌️ رجّع</button></div>
     <div class="slider"><span class="muted" style="font-size:13px">الفرشاة</span><input type="range" id="tSize" min="6" max="90" value="28"></div>
     <div class="row"><button class="btn" id="tUndo">↩️ تراجع</button><button class="btn" id="tRot">🔄 تدوير</button><button class="btn" id="tReset">♻️ من جديد</button></div>
-    <p class="hint" style="text-align:center;margin:8px 0 0">امسح بإصبعك على أي بقايا خلفية — الجزء الباهت هو اللي انشال</p>
+    <p class="hint" style="text-align:center;margin:8px 0 0">قرّب بإصبعين للتفاصيل الدقيقة · «رجّع بدقة» يرجّع الأجزاء على حواف الذكاء الاصطناعي</p>
   </div>
 </div>
 
@@ -543,6 +581,8 @@ a.btn{text-decoration:none}
 <div class="toast" id="toast"></div>
 <div class="busy hidden" id="busy"><div class="bx"><div class="spin"></div><div id="busyTx">لحظة…</div></div></div>
 
+<script src="config.js"></script>
+<script src="cutout.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
