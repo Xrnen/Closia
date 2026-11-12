@@ -1113,6 +1113,8 @@ function showImportPreview(box,p){
 }
 // Data sent by the Safari button lands on #import=<json>
 function checkImportHash(){
+  const sh=location.hash.match(/^#share=(.+)$/);
+  if(sh){ history.replaceState(null,'',location.pathname+location.search); try{ linkSheet(decodeURIComponent(sh[1]),false); }catch(e){} return; }
   const m=location.hash.match(/^#import=(.+)$/); if(!m) return;
   history.replaceState(null,'',location.pathname+location.search);
   let d; try{ d=JSON.parse(decodeURIComponent(m[1])); }catch(e){ toast('بيانات المنتج ناقصة'); return; }
@@ -1578,6 +1580,7 @@ function bindQuickActions(){
 /* ---- add sheet (grid) ---- */
 function addSheet(){
   openSheet(`<h2>أضف قطعة</h2>
+    <button class="quickpaste" id="aQuick"><span class="ai">📋</span><span><b>الصق الرابط اللي نسخته</b><small>من تطبيق المتجر: مشاركة ← نسخ، وبعدين اضغط هنا</small></span></button>
     <div class="agrid">
       <button id="aAlbum">${qi('album')}<b>الألبوم</b></button>
       <button id="aCam">${qi('camera')}<b>الكاميرا</b></button>
@@ -1586,6 +1589,7 @@ function addSheet(){
     </div>
     <button class="arow" id="aLib"><span class="ai">${qi('library')}</span><span><b>مكتبة الأساسيات</b><small>تيشيرت أبيض، جينز، عباية… بضغطة وحدة بدون تصوير</small></span></button>
     <button class="arow" id="aWish"><span class="ai">${qi('wish')}</span><span><b>أضف للأمنيات</b><small>ناوي تشتري شي؟ الصق رابطه وأقولك تستاهل ولا لا</small></span></button>`);
+  $('aQuick').onclick=quickPasteLink;
   $('aAlbum').onclick=()=>{ closeSheet(); pickPhotos(); };
   $('aCam').onclick=()=>{ closeSheet(); $('camIn').value=''; $('camIn').click(); };
   $('aLink').onclick=()=>linkSheet('',false);
@@ -1594,6 +1598,24 @@ function addSheet(){
   $('aWish').onclick=()=>linkSheet('',true);
 }
 $('addBtn').onclick=addSheet;
+// One tap after "Share → Copy" in a store app: read the copied link and start the import.
+async function quickPasteLink(){
+  hidePastePill();
+  let tx='';
+  try{ tx=(await navigator.clipboard.readText()).trim(); }catch(e){ toast('اسمح بـ «لصق» لما يطلبه الآيفون'); return; }
+  if(!splitShare(tx).url){ toast('ما لقيت رابط منسوخ — في المتجر اضغط مشاركة ← نسخ'); return; }
+  linkSheet(tx,false);
+}
+// Coming back to Closia (probably from a store app): offer the copied link.
+function showPastePill(){
+  if($('sheet').classList.contains('on')||$('pastePill')) return;
+  const b=document.createElement('button'); b.id='pastePill'; b.className='pastepill'; b.innerHTML='📋 نسخت رابط منتج؟ <b>الصقه هنا</b>';
+  b.onclick=quickPasteLink; document.body.appendChild(b); requestAnimationFrame(()=>b.classList.add('on'));
+  clearTimeout(showPastePill.t); showPastePill.t=setTimeout(hidePastePill,9000);
+}
+function hidePastePill(){ const b=$('pastePill'); if(b){ b.classList.remove('on'); setTimeout(()=>b.remove(),300); } }
+document.addEventListener('visibilitychange',()=>{ if(document.visibilityState==='visible'&&!S._awaitPaste&&S.items) setTimeout(showPastePill,400); });
+
 $('camIn').addEventListener('change',e=>{ const f=[...e.target.files]; if(f.length) intake(f.map(blob=>({blob}))); });
 
 /* ---- wishlist + "worth buying?" ---- */
