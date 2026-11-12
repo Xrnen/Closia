@@ -1040,7 +1040,8 @@ async function loadLink(input){
   const box=$('lRes'); if(!box) return;
   const sh=splitShare(input), url=sh.url;
   if(!url){ toast('ما لقيت رابط في النص — انسخ رابط المنتج'); return; }
-  S._linkMeta={name:sh.title,brand:brandFromUrl(url),cat:catFromText(sh.title+' '+url),url,store:true};
+  const nm=sh.title||titleFromUrl(url);
+  S._linkMeta={name:nm,brand:brandFromUrl(url),cat:catFromText(nm+' '+url),url,store:true};
   box.innerHTML='<div class="spin" style="margin:24px auto"></div><p class="hint" style="text-align:center">أقرأ صفحة المنتج…</p>';
   const t0=Date.now();
   let r;
@@ -1053,22 +1054,39 @@ async function loadLink(input){
   if(!r.title||/^(shein|zara|h&m|asos)$/i.test(r.title)) r.title=sh.title||r.title;
   showImportPreview(box,r);
 }
+// Readable product name from the URL itself (works even when the store blocks reading the page).
+function titleFromUrl(u){
+  try{ const parts=new URL(u).pathname.split('/').filter(Boolean); let seg='';
+    const prd=parts.indexOf('prd'); if(prd>0) seg=parts[prd-1];                       // ASOS …/<slug>/prd/<id>
+    else seg=parts[parts.length-1]||'';
+    seg=decodeURIComponent(seg).replace(/\.html?$/,'').replace(/-p-?\d+.*$/i,'').replace(/^productpage\.\d+$/,'').replace(/[-_]+/g,' ').trim();
+    if(!/[a-z\u0600-\u06ff]{3}/i.test(seg)) return '';
+    return seg.replace(/\b\w/g,c=>c.toUpperCase()).slice(0,80);
+  }catch(e){ return ''; }
+}
 function importFailed(box,r){
-  const m=S._linkMeta||{}, store=r.store||m.brand||'المتجر';
+  const m=S._linkMeta||{}, store=r.store||m.brand||'المتجر', url=m.url;
   box.innerHTML=`<div class="impfail">
-      <div class="ic">⚠️</div><h3>ما قدرت أسحب المنتج${r.store?` من ${esc(store)}`:''}</h3>
-      <p class="hint">${esc(IMPORT_MSG[r.code]||r.message||'صار خطأ غير متوقع.')}</p>
-      ${m.name?`<div class="lmeta" style="text-align:start"><b>${esc(m.name)}</b><span>حفظت الاسم — يبقى الصورة بس</span></div>`:''}
+      <div class="ic">🔒</div><h3>${esc(store)} ما يسمح بسحب الصور</h3>
+      <p class="hint">${esc(IMPORT_MSG[r.code]||r.message||'صار خطأ غير متوقع.')} خلّها ٣ ضغطات:</p>
+      ${m.name?`<div class="lmeta" style="text-align:start"><b>${esc(m.name)}</b><span>${esc(store)} · الاسم والنوع جاهزين ✓</span></div>`:''}
     </div>
-    <div class="lbl" style="margin-top:14px">أضفها بطريقة ثانية:</div>
-    <div style="display:grid;gap:8px">
-      <button class="btn primary" id="fUpload">🖼️ ارفع صورة المنتج</button>
-      <div class="row"><button class="btn" id="fPaste">📋 الصق صورة</button><button class="btn" id="fSafari">🧭 زر سفاري</button></div>
-    </div>`;
+    <div class="easy">
+      ${url?`<button class="btn primary block" id="fOpen"><span class="n">١</span> افتح المنتج</button>`:''}
+      <div class="easystep"><span class="n">${url?'٢':'١'}</span>اضغط مطوّل على صورة المنتج ← <b>نسخ</b> ← ارجع هنا</div>
+      <button class="btn block" id="fPaste"><span class="n">${url?'٣':'٢'}</span> 📋 الصق الصورة</button>
+    </div>
+    <div class="row" style="margin-top:10px"><button class="btn ghost" id="fUpload">🖼️ من الصور</button><button class="btn ghost" id="fSafari">🧭 زر سفاري</button></div>`;
+  if($('fOpen')) $('fOpen').onclick=()=>{ S._awaitPaste=true; window.open(url,'_blank'); };
   $('fUpload').onclick=()=>{ S._pendingMeta=S._linkMeta; S._pendingWish=S._linkWish; closeSheet(); pickPhotos(); };
   $('fPaste').onclick=()=>pasteImage(true);
   $('fSafari').onclick=safariSheet;
 }
+// Coming back from the store: highlight the paste button.
+document.addEventListener('visibilitychange',()=>{
+  if(document.visibilityState!=='visible'||!S._awaitPaste||!$('fPaste')) return;
+  S._awaitPaste=false; $('fPaste').classList.add('primary','pulse'); toast('اضغط «الصق الصورة» 👇');
+});
 function showImportPreview(box,p){
   const sel=new Set([0]);
   const price=p.price?`${p.price} ${p.currency||''}`.trim():'';
