@@ -1112,17 +1112,24 @@ function bookmarkletCode(){
   return `javascript:(()=>{const A=${A};const q=s=>[...document.querySelectorAll(s)];const m=n=>{const e=document.querySelector('meta[property="'+n+'"],meta[name="'+n+'"]');return e&&e.content||''};let p={};const w=o=>{if(!o||typeof o!='object'||p.n)return;if(Array.isArray(o))return o.forEach(w);const t=[].concat(o['@type']||[]).join(' ');if(/Product/.test(t)){const f=[].concat(o.offers||[])[0]||{};p={n:o.name,b:o.brand&&(o.brand.name||o.brand),pr:f.price||f.lowPrice||'',c:f.priceCurrency||'',i:[].concat(o.image||[]).map(x=>x&&(x.url||x.contentUrl||x))}}if(o['@graph'])w(o['@graph'])};q('script[type="application/ld+json"]').forEach(s=>{try{w(JSON.parse(s.textContent))}catch(e){}});const g=q('img').filter(i=>i.naturalWidth>=400&&i.getBoundingClientRect().width>100).sort((a,b)=>b.naturalWidth*b.naturalHeight-a.naturalWidth*a.naturalHeight).map(i=>i.currentSrc||i.src);const i=[...(p.i||[]),m('og:image'),m('twitter:image'),...g].filter(x=>typeof x=='string'&&x).map(u=>{try{return new URL(u,location.href).href.replace(/^http:/,'https:')}catch(e){return''}}).filter((u,k,a)=>u&&a.indexOf(u)==k&&!/^data:|\\.svg/.test(u)).slice(0,8);const d={u:location.href,n:p.n||m('og:title')||document.title,b:typeof p.b=='string'?p.b:'',pr:p.pr||m('product:price:amount'),c:p.c||m('product:price:currency'),i};location.href=A+'#import='+encodeURIComponent(JSON.stringify(d))})()`;
 }
 function safariSheet(){
-  openSheet(`<h2>🧭 زر «أضف إلى Closia» في سفاري</h2>
-    <p class="hint" style="margin-top:-6px">بعض المتاجر (زارا، H&M، ASOS، صفحات شي إن) تمنع أي خادم يقرأ صفحاتها. هالزر يشتغل داخل سفاري نفسه وأنت فاتح المنتج، فيقرأ الصورة والاسم والسعر من الصفحة اللي قدامك — بدون أي تحايل على حماية المتجر.</p>
+  openSheet(`<h2>🧭 زر «أضف إلى Closia»</h2>
+    <p class="hint" style="margin-top:-6px">زارا وH&M وASOS ما يسمحون لـ Closia يقرأ صفحاتهم. هالزر تحطه في سفاري مرة وحدة، وبعدها أي منتج تفتحه تضغطه وينضاف لخزانتك.</p>
+    <div class="lbl" style="margin-top:14px">التركيب (مرة وحدة بس)</div>
     <ol class="steps">
-      <li>اضغط <b>انسخ الكود</b> تحت.</li>
-      <li>في سفاري افتح أي صفحة ← زر المشاركة ← <b>إضافة إشارة مرجعية</b> ← سمّها «أضف إلى Closia» ← حفظ.</li>
-      <li>افتح <b>الإشارات المرجعية</b> ← اضغط مطوّل على «أضف إلى Closia» ← <b>تعديل</b> ← امسح الرابط والصق الكود ← تم.</li>
-      <li>من الحين: افتح أي منتج ← اكتب في شريط العنوان «أضف إلى Closia» واضغطها ← يفتح Closia بالمنتج جاهز.</li>
+      <li><b>انسخ الكود</b> من الزر تحت.</li>
+      <li>افتح <b>سفاري</b> على أي موقع ← اضغط زر <b>المشاركة</b> (المربع والسهم) ← <b>إضافة إشارة مرجعية</b> ← <b>حفظ</b>.</li>
+      <li>في سفاري اضغط زر <b>الكتاب 📖</b> ← <b>تعديل</b> ← اضغط على الإشارة اللي حفظتها.</li>
+      <li>غيّر الاسم إلى <b>Closia</b>، وامسح الرابط اللي تحته كله والصق مكانه الكود ← <b>تم</b>.</li>
+    </ol>
+    <div class="lbl">الاستخدام</div>
+    <ol class="steps">
+      <li>افتح المنتج في سفاري (زارا مثلاً).</li>
+      <li>اضغط على <b>شريط العنوان</b> فوق واكتب <b>Closia</b> ← اضغط على الإشارة اللي تطلع.</li>
+      <li>يفتح Closia والمنتج جاهز تضيفه ✨</li>
     </ol>
     <button class="btn primary block" id="bmCopy">📋 انسخ الكود</button>
-    <p class="hint" style="margin-top:10px">لو المتجر منع تحميل الصورة نفسها، اضغط مطوّل على صورة المنتج ← نسخ ← وارجع «الصق صورة».</p>`);
-  $('bmCopy').onclick=async()=>{ try{ await navigator.clipboard.writeText(bookmarkletCode()); toast('انتسخ ✓ الحين سوّ الإشارة المرجعية'); }catch(e){ prompt('انسخ الكود:',bookmarkletCode()); } };
+    <div class="note" style="margin-top:14px"><b>💡 أسهل طريقة بدون تركيب</b><p>افتح المنتج ← اضغط مطوّل على صورته ← <b>نسخ</b> ← ارجع لـ Closia ← زر الكاميرا ← <b>الصق صورة</b>.</p></div>`);
+  $('bmCopy').onclick=async()=>{ try{ await navigator.clipboard.writeText(bookmarkletCode()); toast('انتسخ ✓ الحين سوّ الخطوة ٢'); }catch(e){ prompt('انسخ الكود:',bookmarkletCode()); } };
 }
 async function importLogSheet(){
   const log=(await DB.get('kv','importLog'))||[];
